@@ -6,7 +6,7 @@ from core.bank import BankInterface
 from core import tools
 from core.region_match import MatchResult
 from core.osrs_client import ToolplaneTab
-from core.control import ScriptControl
+from core.control import ScriptControl, ScriptTerminationException
 
 from PIL import Image
 import random
@@ -101,7 +101,7 @@ class BotExecutor(Bot):
     def start(self):
         self.log.info(f"Starting Woodcutter Bot for {self.cfg.log_type.name}")
         
-        while True:
+        while not self.terminate:
             try:
                 # Check if inventory is full
                 if self.check_inventory_full():
@@ -140,6 +140,8 @@ class BotExecutor(Bot):
                         self.chop_tree()
                         self.tree_waits = 0
                     except Exception as e:
+                        if self.terminate:
+                            break
                         if self.cfg.drop_items.value:
                             # Marked trees are stumps (their marker disappears): wait for respawn.
                             self.tree_waits += 1
@@ -165,13 +167,17 @@ class BotExecutor(Bot):
                 # Check if we should propose a break
                 self.control.propose_break()
                 
+            except ScriptTerminationException:
+                break
             except Exception as e:
+                if self.terminate:
+                    break
                 self.consecutive_failures += 1
                 self.log.error(f"Error in woodcutting process: {e}")
                 
                 if self.consecutive_failures > self.cfg.max_retries.value:
                     self.log.critical(f"Failed {self.consecutive_failures} times in a row. Exiting.")
-                    sys.exit(1)
+                    return
                 else:
                     self.log.warning(f"Retry attempt {self.consecutive_failures}/{self.cfg.max_retries.value}")
                     time.sleep(3)  # Wait a bit before retrying
