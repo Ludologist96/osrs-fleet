@@ -129,6 +129,10 @@ ACTIONS = {
     "restart-slot": lambda n: ["systemctl", "restart", f"osrs-slot@{n}.target"],
     "stop-slot": lambda n: ["systemctl", "stop", f"osrs-slot@{n}.target"],
     "start-slot": lambda n: ["systemctl", "start", f"osrs-slot@{n}.target"],
+    # Give slot N the Jagex login RuneLite last saved on Windows (credentials.properties).
+    "creds": lambda n: ["/opt/osrs/bin/fleetctl", "creds", str(n)],
+    # Copy slot 1's RuneLite plugins/settings to slot N (logins are not copied).
+    "copy-settings": lambda n: ["/opt/osrs/bin/fleetctl", "copy-settings", "1", str(n)],
 }
 
 
