@@ -103,6 +103,11 @@ chmod 644 /opt/osrs/runelite/RuneLite.jar
 say "Installing services"
 # shared X socket folder that every slot's screen can use
 echo 'd /tmp/.X11-unix 1777 root root -' > /etc/tmpfiles.d/osrs-x11.conf
+# lock that makes the slots start RuneLite one after another (see slot)
+cat >> /etc/tmpfiles.d/osrs-x11.conf <<'TMPF'
+d /run/osrs 0775 root osrs -
+f /run/osrs/runelite-start.lock 0666 root osrs -
+TMPF
 systemd-tmpfiles --create /etc/tmpfiles.d/osrs-x11.conf
 install -m 644 "$HERE"/systemd/* /etc/systemd/system/
 systemctl daemon-reload

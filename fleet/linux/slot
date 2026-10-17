@@ -42,6 +42,15 @@ case "$comp" in
     client)
         wait_display
         cd "$HOME"
+        # Start RuneLites one at a time, a little apart. When all 8 launchers
+        # download the client at once, repo.runelite.net answers HTTP 429
+        # (rate limited) and RuneLite stops with "fatal error".
+        lock=/run/osrs/runelite-start.lock
+        if [ -w "$lock" ] || [ -w "$(dirname "$lock")" ]; then
+            flock "$lock" sleep "${CLIENT_START_GAP:-20}"
+        else
+            sleep $(( (n - 1) * ${CLIENT_START_GAP:-20} ))
+        fi
         # shellcheck disable=SC2086
         exec java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar
         ;;
