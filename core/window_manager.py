@@ -483,13 +483,30 @@ class LinuxWindow:
             return 0
     
     def _is_active(self):
-        """Check if the window is active"""
+        """True if this window (or one of its child windows) has the keyboard focus.
+
+        Java puts the focus on a child "focus proxy" window, so comparing the
+        focus window with the top-level window alone was always False.
+        """
         try:
-            active_window_id = self.display.get_input_focus().focus.id
-            return active_window_id == self.window.id
-        except:
-            return False
-    
+            NET_ACTIVE_WINDOW = self.display.intern_atom('_NET_ACTIVE_WINDOW')
+            prop = self.root.get_full_property(NET_ACTIVE_WINDOW, self.Xlib.X.AnyPropertyType)
+            if prop and prop.value and prop.value[0] == self.window.id:
+                return True
+        except Exception:
+            pass
+        try:
+            focus = self.display.get_input_focus().focus
+            for _ in range(10):  # walk up from the focused window
+                if not hasattr(focus, 'id') or focus.id == self.root.id:
+                    return False
+                if focus.id == self.window.id:
+                    return True
+                focus = focus.query_tree().parent
+        except Exception:
+            pass
+        return False
+
     def activate(self):
         """Activate the window"""
         if not self.Xlib:
@@ -506,34 +523,47 @@ class LinuxWindow:
             log.error(f"Error activating window: {e}")
     
     def bring_to_focus(self):
-        """Bring window to foreground on Linux"""
+        """Bring window to foreground on Linux.
+
+        Asks the window manager (_NET_ACTIVE_WINDOW) instead of grabbing the X
+        focus directly: grabbing it under Java's feet makes Java drop key
+        presses, e.g. the Shift of shift-click-drop. Does nothing when the
+        window already has the focus (this is called before every click).
+        """
         if not self.Xlib:
             log.warning("Xlib not available, can't focus window")
             return
-            
+
         try:
-            # Use direct focus method - this is the most reliable approach
-            self.window.set_input_focus(self.Xlib.X.RevertToParent, 0)
-            self.window.configure(stack_mode=self.Xlib.X.Above)
-            self.display.flush()
-            self.display.sync()
-            
-            # Give window manager time to respond
-            time.sleep(0.2)
-            
-            # Check if window activation was successful
             if self._is_active():
                 return
-            
-            # If focus failed, try once more with map operation
-            log.debug("First focus attempt failed, trying map operation")
+            from Xlib.protocol import event as xevent
+            X = self.Xlib.X
+            NET_ACTIVE_WINDOW = self.display.intern_atom('_NET_ACTIVE_WINDOW')
+            ev = xevent.ClientMessage(
+                window=self.window,
+                client_type=NET_ACTIVE_WINDOW,
+                data=(32, [2, X.CurrentTime, 0, 0, 0]),  # 2 = request from a pager/tool
+            )
+            self.root.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+            self.display.flush()
+
+            # Give window manager time to respond
+            for _ in range(10):
+                time.sleep(0.05)
+                if self._is_active():
+                    return
+
+            # No window manager answered: fall back to setting the focus directly.
+            log.debug("Window manager did not activate the window, setting focus directly")
             self.window.map()
             self.window.raise_window()
+            self.window.set_input_focus(X.RevertToParent, X.CurrentTime)
             self.display.flush()
             self.display.sync()
         except Exception as e:
             log.error(f"Error focusing Linux window: {e}")
-    
+
     def minimize(self):
         """Minimize the window"""
         if not self.Xlib:
