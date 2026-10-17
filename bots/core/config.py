@@ -4,15 +4,8 @@ import json
 from typing import Any, Dict, Union
 
 # Define a type map for JSON import/export
-TYPE_MAP = {
-    "RGB": RGBParam,
-    "Range": RangeParam,
-    "BreakCfg": BreakCfgParam,
-    "Waypoint": WaypointParam,
-    "Route": RouteParam,
-    "Item": ItemParam,
-    "ItemList": ItemListParam,
-}
+# Built from every parameter class, so new types (RGBList, Int, Boolean...) can't be forgotten.
+TYPE_MAP = {cls.type(): cls for cls in CFG_TYPES}
 
 example_config = {
     "bank_tile": {'type': "RGB", 'value': {"rgb": [255, 0, 100], "hex": "#FF0064"}},
