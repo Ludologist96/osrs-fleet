@@ -30,7 +30,10 @@ class BotConfig(BotConfigMixin):
     
     # Optional configuration
     chop_click_delay: RangeParam = RangeParam(0.2, 0.5)
-    inventory_check_delay: RangeParam = RangeParam(3.0, 5.0)
+    inventory_check_delay: RangeParam = RangeParam(1.5, 3.0)
+    # Wait until the player stops walking after clicking a tree. Needs RuneLite's
+    # player position overlay; without it every click wastes ~5 s retrying.
+    wait_while_walking: BooleanParam = BooleanParam(False)
     
     break_cfg: BreakCfgParam = BreakCfgParam(
         RangeParam(10, 30),  # break duration range in seconds
@@ -52,7 +55,7 @@ class BotConfig(BotConfigMixin):
 
     # Drop mode: when every marked tree is a stump, wait here for one to grow back
     # instead of walking the bank route.
-    tree_respawn_wait: RangeParam = RangeParam(3.0, 8.0)
+    tree_respawn_wait: RangeParam = RangeParam(1.5, 4.0)
     max_tree_waits: IntParam = IntParam(40)  # stop after this many waits in a row
 
     
@@ -199,6 +202,9 @@ class BotExecutor(Bot):
                 errors.append(f"{current_tree.to_hex()}: {e}")
         else:
             raise RuntimeError("no marked tree found (" + "; ".join(errors) + ")")
+
+        if not self.cfg.wait_while_walking.value:
+            return
 
         # Wait until character stops moving
         start_time = time.time()

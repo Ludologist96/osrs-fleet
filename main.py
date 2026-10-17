@@ -17,6 +17,8 @@ from pathlib import Path
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import core  # noqa: E402,F401  (on Linux makes Xlib thread-safe before anything opens a display)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="OSRS Bot Management System")
