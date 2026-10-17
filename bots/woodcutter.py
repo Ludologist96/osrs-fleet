@@ -174,33 +174,32 @@ class BotExecutor(Bot):
                     time.sleep(3)  # Wait a bit before retrying
     
     def chop_tree(self):
-        """Click on a tree tile to start chopping, cycling through available tiles"""
+        """Click a marked tree. Tries every tree colour once, starting with the next one
+        in the cycle, so a stump (its marker is gone) costs no extra waiting."""
         tree_tiles = self.cfg.tree_tiles.value
-        
+
         if not tree_tiles:
             self.log.error("No tree tile colors specified")
             return False
-        
-        # Get the next tree tile in the cycle
-        current_tree = tree_tiles[self.tree_index % len(tree_tiles)]
-        self.tree_index += 1
-        
-        max_attempts = 2
-        for attempt in range(max_attempts):
+
+        errors = []
+        for i in range(len(tree_tiles)):
+            current_tree = tree_tiles[(self.tree_index + i) % len(tree_tiles)]
             try:
                 self.client.smart_click_tile(
                     current_tree.value,
                     ['chop', 'tree'],
-                    retry_hover=5
+                    retry_hover=5,
+                    retry_match=1,
                 )
+                self.tree_index += i + 1
                 time.sleep(self.cfg.chop_click_delay.choose())
                 break
             except Exception as e:
-                if attempt == max_attempts - 1:
-                    raise RuntimeError(f"Failed to click tree tile after {max_attempts} attempts: {e}")
-                self.log.warning(f"Failed to click tree tile (attempt {attempt+1}/{max_attempts}): {e}")
-                time.sleep(1)
-        
+                errors.append(f"{current_tree.to_hex()}: {e}")
+        else:
+            raise RuntimeError("no marked tree found (" + "; ".join(errors) + ")")
+
         # Wait until character stops moving
         start_time = time.time()
         timeout = 15  # Timeout after 15 seconds
