@@ -52,7 +52,14 @@ case "$comp" in
             sleep $(( (n - 1) * ${CLIENT_START_GAP:-20} ))
         fi
         # shellcheck disable=SC2086
-        exec java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar
+        java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar || true
+        # The launcher starts the game in a second Java process and exits.
+        # Stay alive while the game runs: when this script ends, systemd stops
+        # everything it started, the game included, and restarts it in a loop.
+        sleep 5
+        while pgrep -u "$(id -u)" -f 'net\.runelite\.client\.RuneLite' >/dev/null; do
+            sleep 5
+        done
         ;;
     app)
         wait_display
