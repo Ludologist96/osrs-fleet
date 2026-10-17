@@ -1,0 +1,11 @@
+[Unit]
+Description=OSRS slot %i - window manager
+PartOf=osrs-slot@%i.target
+BindsTo=osrs-xvfb@%i.service
+After=osrs-xvfb@%i.service
+
+[Service]
+User=bot%i
+ExecStart=/opt/osrs/bin/slot wm %i
+Restart=always
+RestartSec=3

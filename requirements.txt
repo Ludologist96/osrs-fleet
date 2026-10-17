@@ -1,0 +1,25 @@
+# Core bot dependencies
+pygetwindow
+pyautogui
+pillow
+mss
+opencv-python
+pytesseract
+keyboard
+requests
+numpy
+pyperclip
+pydantic
+
+# UI server
+fastapi
+uvicorn[standard]
+httpx
+websockets
+
+# Legacy (still used by some modules)
+flask
+flask-cors
+
+# Linux fleet VM only (virtual screens)
+python-xlib; sys_platform == "linux"

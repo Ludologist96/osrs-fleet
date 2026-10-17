@@ -1,0 +1,11 @@
+[Unit]
+Description=OSRS slot %i - VNC viewer access (localhost:590%i)
+PartOf=osrs-slot@%i.target
+BindsTo=osrs-xvfb@%i.service
+After=osrs-xvfb@%i.service
+
+[Service]
+User=bot%i
+ExecStart=/opt/osrs/bin/slot vnc %i
+Restart=always
+RestartSec=3

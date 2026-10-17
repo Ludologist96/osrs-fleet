@@ -1,0 +1,7 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Fleet VM files run inside Linux: always keep Unix line endings,
+# even when checked out on Windows (CRLF breaks bash and systemd).
+*.sh text eol=lf
+fleet/linux/** text eol=lf

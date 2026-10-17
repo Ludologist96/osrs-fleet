@@ -1,0 +1,9 @@
+[Unit]
+Description=OSRS slot %i - virtual screen :%i
+PartOf=osrs-slot@%i.target
+
+[Service]
+User=bot%i
+ExecStart=/opt/osrs/bin/slot xvfb %i
+Restart=always
+RestartSec=3

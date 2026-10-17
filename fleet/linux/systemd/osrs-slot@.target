@@ -1,0 +1,6 @@
+[Unit]
+Description=OSRS fleet slot %i (screen, VNC, RuneLite, bot app)
+Wants=osrs-xvfb@%i.service osrs-wm@%i.service osrs-vnc@%i.service osrs-client@%i.service osrs-app@%i.service
+
+[Install]
+WantedBy=multi-user.target

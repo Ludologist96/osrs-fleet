@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Runs one component of one fleet slot. Called by the systemd units:
+#   slot <xvfb|wm|vnc|client|app> <N>
+set -euo pipefail
+
+CONF=/etc/osrs/fleet.conf
+[ -f "$CONF" ] && source "$CONF"
+RESOLUTION=${RESOLUTION:-1280x800}
+APP_DIR=${APP_DIR:-/opt/osrs/app}
+
+comp=${1:?component}
+n=${2:?slot number}
+export DISPLAY=":$n"
+
+wait_display() {
+    for _ in $(seq 1 100); do
+        xdpyinfo -display ":$n" >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    echo "display :$n did not come up" >&2
+    exit 1
+}
+
+case "$comp" in
+    xvfb)
+        # -ac: any local user may connect (the dashboard reads every screen).
+        # -nolisten tcp: nothing is reachable from the network.
+        rm -f "/tmp/.X${n}-lock"
+        exec Xvfb ":$n" -screen 0 "${RESOLUTION}x24" -nolisten tcp -ac -dpi 96
+        ;;
+    wm)
+        wait_display
+        # No key auto-repeat: a held key must never turn into repeated presses.
+        xset r off || true
+        exec openbox
+        ;;
+    vnc)
+        wait_display
+        exec x11vnc -display ":$n" -rfbport $((5900 + n)) -localhost \
+            -forever -shared -nopw -quiet -noxdamage
+        ;;
+    client)
+        wait_display
+        cd "$HOME"
+        # shellcheck disable=SC2086
+        exec java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar
+        ;;
+    app)
+        wait_display
+        cd "$APP_DIR"
+        export OSRS_SLOT="$n"
+        exec /opt/osrs/venv/bin/python main.py --port $((8010 + n))
+        ;;
+    *)
+        echo "unknown component: $comp" >&2
+        exit 2
+        ;;
+esac

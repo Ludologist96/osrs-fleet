@@ -1,0 +1,12 @@
+[Unit]
+Description=OSRS slot %i - bot app (web UI on port 801%i)
+PartOf=osrs-slot@%i.target
+BindsTo=osrs-xvfb@%i.service
+After=osrs-wm@%i.service
+
+[Service]
+User=bot%i
+UMask=0002
+ExecStart=/opt/osrs/bin/slot app %i
+Restart=always
+RestartSec=5

@@ -1,0 +1,11 @@
+[Unit]
+Description=OSRS slot %i - RuneLite
+PartOf=osrs-slot@%i.target
+BindsTo=osrs-xvfb@%i.service
+After=osrs-wm@%i.service
+
+[Service]
+User=bot%i
+ExecStart=/opt/osrs/bin/slot client %i
+Restart=always
+RestartSec=10

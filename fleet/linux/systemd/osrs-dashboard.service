@@ -1,0 +1,11 @@
+[Unit]
+Description=OSRS fleet dashboard
+After=network.target
+
+[Service]
+ExecStart=/opt/osrs/venv/bin/python /opt/osrs/app/fleet/dashboard/dashboard.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
