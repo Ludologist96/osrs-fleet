@@ -132,6 +132,20 @@ ACTIONS = {
 }
 
 
+def start_update() -> dict:
+    """Run `fleetctl update` outside this service (it restarts the dashboard at the end)."""
+    unit = f"osrs-update-{int(time.time())}"
+    res = subprocess.run(["systemd-run", "--no-block", f"--unit={unit}",
+                          "/opt/osrs/bin/fleetctl", "update"],
+                         capture_output=True, text=True)
+    return {"ok": res.returncode == 0, "unit": unit, "error": res.stderr.strip()}
+
+
+def journal(unit: str, lines: int = 100) -> str:
+    return _run(["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short-iso"],
+                timeout=10)
+
+
 def stop_bot(n: int) -> bool:
     st = bot_status(n)
     if not st["bot"]:
@@ -172,6 +186,16 @@ class Handler(BaseHTTPRequestHandler):
             with ThreadPoolExecutor(max_workers=SLOTS) as ex:
                 slots = list(ex.map(slot_info, range(1, SLOTS + 1)))
             self._json({"slots": slots})
+        elif m := re.fullmatch(r"/api/slot/(\d+)/log/(xvfb|wm|vnc|client|app)", path):
+            # Last lines of one slot part's log (what `fleetctl logs N part` shows).
+            n, comp = int(m.group(1)), m.group(2)
+            lm = re.search(r"(?:^|&)n=(\d+)", query)
+            lines = min(1000, int(lm.group(1))) if lm else 100
+            if not 1 <= n <= SLOTS:
+                return self._json({"error": "bad slot"}, 400)
+            self._send(200, journal(f"osrs-{comp}@{n}.service", lines).encode(), "text/plain; charset=utf-8")
+        elif m := re.fullmatch(r"/api/update-log/(osrs-update-\d+)", path):
+            self._send(200, journal(m.group(1), 200).encode(), "text/plain; charset=utf-8")
         elif m := re.fullmatch(r"/shot/(\d+)\.jpg", path):
             n = int(m.group(1))
             wm = re.search(r"(?:^|&)w=(\d+)", query)
@@ -185,6 +209,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        if self.path == "/api/update":
+            # Copy the new code from the Windows folder into the VM and restart the bot apps.
+            return self._json(start_update())
         m = re.fullmatch(r"/api/slot/(\d+)/([a-z-]+)", self.path)
         if not m:
             return self._json({"ok": False, "error": "bad path"}, 404)
