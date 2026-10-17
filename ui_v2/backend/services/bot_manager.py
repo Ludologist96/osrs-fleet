@@ -87,6 +87,7 @@ class BotManagerService:
         self._initialized = True
         self.bot_registry: Dict[str, BotMetadata] = {}
         self.current_bot: Optional[BotInstance] = None
+        self.last_error: Optional[str] = None  # why the last start_bot failed (shown in the UI)
         self._monitoring_active = False
         self._monitoring_thread: Optional[threading.Thread] = None
 
@@ -357,6 +358,7 @@ class BotManagerService:
 
     def start_bot(self, bot_id: str, config: Dict[str, Any], username: str = "") -> bool:
         log.info(f"start_bot() called for bot_id: {bot_id}")
+        self.last_error = None
         try:
             if self.current_bot:
                 log.info(f"Stopping currently running bot: {self.current_bot.bot_id}")
@@ -400,7 +402,8 @@ class BotManagerService:
             log.info(f"Started bot {bot_id} successfully")
             return True
         except Exception as e:
-            log.error(f"Failed to start bot {bot_id}: {e}")
+            log.error(f"Failed to start bot {bot_id}: {e}", exc_info=True)
+            self.last_error = f"{type(e).__name__}: {e}"
             if self.current_bot and self.current_bot.bot_id == bot_id:
                 self.current_bot = None
             return False

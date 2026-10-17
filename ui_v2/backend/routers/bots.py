@@ -53,8 +53,9 @@ def bot_status(bot_id: str) -> Dict[str, Any]:
 
 @router.post("/bot/{bot_id}/start")
 def start_bot(bot_id: str, body: BotStartRequest) -> SuccessResponse:
-    ok = _mgr().start_bot(bot_id, body.config, body.username)
-    return SuccessResponse(success=ok)
+    mgr = _mgr()
+    ok = mgr.start_bot(bot_id, body.config, body.username)
+    return SuccessResponse(success=ok, error=None if ok else mgr.last_error)
 
 
 @router.post("/bot/{bot_id}/stop")

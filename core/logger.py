@@ -104,6 +104,19 @@ Server -> Client Messages:
 # Global client subscriptions dictionary to be shared between functions
 client_subscriptions = {}
 
+
+import collections as _collections
+RECENT_LOGS: "_collections.deque[str]" = _collections.deque(maxlen=1000)
+
+
+class RecentLogHandler(logging.Handler):
+    """Keeps the last log lines in memory for the web API."""
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            RECENT_LOGS.append(f"{self.format(record)}")
+        except Exception:
+            self.handleError(record)
+
 class WebSocketLogHandler(logging.Handler):
     """
     A logging.Handler that serializes each LogRecord to JSON and pushes it
@@ -467,7 +480,12 @@ class LoggerWrapper:
             file_handler.setFormatter(self._get_default_formatter())
             logger.addHandler(file_handler)
 
-        # 3) WebSocket handler
+        # 3) In-memory buffer (GET /api/logging/recent; lets you read logs without a terminal)
+        recent_handler = RecentLogHandler()
+        recent_handler.setFormatter(self._get_default_formatter())
+        logger.addHandler(recent_handler)
+
+        # 4) WebSocket handler
         ws_handler = WebSocketLogHandler()
         # Make sure it listens at the same level (or more permissive) than the logger
         ws_handler.setLevel(level)
@@ -540,6 +558,11 @@ class LoggerWrapper:
 
 # Singleton instance of LoggerWrapper
 _logger_wrapper = LoggerWrapper()
+
+def get_recent_logs(n: int = 200) -> list[str]:
+    """Last n formatted log lines from every logger (newest last)."""
+    return list(RECENT_LOGS)[-n:]
+
 
 def get_logger(
     name: str,
