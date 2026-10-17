@@ -50,6 +50,11 @@ class BotConfig(BotConfigMixin):
     ])  # Empty default route, configure in UI
     inv_full_at: IntParam = IntParam(27)  # Default inventory capacity
 
+    # Drop mode: when every marked tree is a stump, wait here for one to grow back
+    # instead of walking the bank route.
+    tree_respawn_wait: RangeParam = RangeParam(3.0, 8.0)
+    max_tree_waits: IntParam = IntParam(40)  # stop after this many waits in a row
+
     
     
     ###########################################
@@ -82,6 +87,7 @@ class BotExecutor(Bot):
         self.log = get_logger('WoodcutterBot')
         self.consecutive_failures = 0
         self.tree_index = 0  # Used to cycle through tree tiles
+        self.tree_waits = 0  # drop mode: waits in a row with no marked tree
         
         if not self.cfg.drop_items.value and not self.cfg.bank_to_trees.value:
             self.log.warning("Banking enabled but no route specified. Please set bank_to_trees in the config.")
@@ -129,7 +135,20 @@ class BotExecutor(Bot):
                     try:
                         self.log.info("Not woodcutting. Clicking tree...")
                         self.chop_tree()
+                        self.tree_waits = 0
                     except Exception as e:
+                        if self.cfg.drop_items.value:
+                            # Marked trees are stumps (their marker disappears): wait for respawn.
+                            self.tree_waits += 1
+                            if self.tree_waits > self.cfg.max_tree_waits.value:
+                                self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
+                                return
+                            wait = self.cfg.tree_respawn_wait.choose()
+                            self.log.info(f"No marked tree available ({e}); waiting {wait:.1f}s "
+                                          f"({self.tree_waits}/{self.cfg.max_tree_waits.value})")
+                            time.sleep(wait)
+                            self.control.propose_break()
+                            continue
                         self.log.warning(f"Did we die or something? walking to trees: {e}")
                         self.mover.execute_route(self.cfg.bank_to_trees)
                         self.chop_tree()
