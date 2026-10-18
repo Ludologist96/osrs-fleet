@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from core import cv_debug as _cv_debug
 
-from ui_v2.backend.routers import bots, items, logging as logging_router, cv_debug
+from ui_v2.backend.routers import bots, items, logging as logging_router, cv_debug, session
 from ui_v2.backend.ws.log_bridge import router as ws_router
 from ui_v2.backend.services.bot_manager import BotManagerService
 
@@ -70,6 +70,7 @@ app.include_router(bots.router)
 app.include_router(items.router)
 app.include_router(logging_router.router)
 app.include_router(cv_debug.router)
+app.include_router(session.router)
 app.include_router(ws_router)
 
 # ---------------------------------------------------------------------------

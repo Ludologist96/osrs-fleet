@@ -61,10 +61,17 @@ cmd_update() {
         /opt/osrs/venv/bin/pip install -q -r "$APP_DIR/requirements.txt" python-xlib
         echo "$new_sha" > /opt/osrs/.requirements.sha
     fi
-    if ! cmp -s "$src/fleet/linux/systemd/osrs-app@.service" /etc/systemd/system/osrs-app@.service; then
+    changed=0
+    for f in "$src"/fleet/linux/systemd/*; do
+        cmp -s "$f" "/etc/systemd/system/$(basename "$f")" || changed=1
+    done
+    if [ "$changed" = 1 ]; then
         install -m 644 "$src"/fleet/linux/systemd/* /etc/systemd/system/
         systemctl daemon-reload
     fi
+    for n in $(seq 1 "$SLOTS"); do echo "slot$n: 127.0.0.1:$((5900 + n))"; done > /etc/osrs/vnc-tokens
+    systemctl enable osrs-websockify.service >/dev/null 2>&1 || true
+    systemctl restart osrs-websockify.service || true
     echo "Restarting bot apps and dashboard (RuneLite clients keep running)"
     for n in $(seq 1 "$SLOTS"); do systemctl restart "osrs-app@$n.service"; done
     systemctl restart osrs-dashboard.service

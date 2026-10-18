@@ -111,7 +111,10 @@ TMPF
 systemd-tmpfiles --create /etc/tmpfiles.d/osrs-x11.conf
 install -m 644 "$HERE"/systemd/* /etc/systemd/system/
 systemctl daemon-reload
+# tokens for the browser screen view: slotN -> that slot's VNC port
+for n in $(seq 1 "$SLOTS"); do echo "slot$n: 127.0.0.1:$((5900 + n))"; done > /etc/osrs/vnc-tokens
 systemctl enable --now osrs-dashboard.service >/dev/null
+systemctl enable --now osrs-websockify.service >/dev/null
 for n in $(seq 1 "$SLOTS"); do
     systemctl enable "osrs-slot@$n.target" >/dev/null 2>&1
     systemctl start "osrs-slot@$n.target"

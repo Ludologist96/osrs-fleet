@@ -39,6 +39,9 @@ CONF = read_conf()
 SLOTS = int(CONF.get("SLOTS", 8))
 PORT = int(CONF.get("DASHBOARD_PORT", 8000))
 
+STATIC_TYPES = {".js": "application/javascript", ".html": "text/html; charset=utf-8",
+                ".css": "text/css", ".txt": "text/plain"}
+
 
 # ---------------------------------------------------------------- status
 
@@ -74,6 +77,29 @@ def bot_status(n: int) -> dict:
         return {"bot": None, "status": "idle", "runtime": ""}
     except Exception:
         return {"bot": None, "status": "offline", "runtime": ""}
+
+
+def window_geometry(n: int) -> dict | None:
+    """Position and size of the slot's RuneLite window on its screen."""
+    env = dict(os.environ, DISPLAY=f":{n}")
+    out = _run(["xdotool", "search", "--name", "^RuneLite", "getwindowgeometry", "--shell"], env=env)
+    vals = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    try:
+        return {k.lower(): int(vals[k]) for k in ("X", "Y", "WIDTH", "HEIGHT")}
+    except (KeyError, ValueError):
+        return None
+
+
+def bot_list() -> list[dict]:
+    """Bots the slots can run (asked from the first slot app that answers)."""
+    for n in range(1, SLOTS + 1):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{8010 + n}/api/bots", timeout=3) as r:
+                data = json.load(r)
+            return [{"id": k, "name": v.get("name", k)} for k, v in data.items()]
+        except Exception:
+            continue
+    return []
 
 
 def slot_info(n: int) -> dict:
@@ -185,6 +211,20 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if path in ("/", "/index.html"):
             self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        elif path in ("/launcher", "/view"):
+            self._send(200, (HERE / f"{path[1:]}.html").read_bytes(), "text/html; charset=utf-8")
+        elif path.startswith("/novnc/"):
+            f = (HERE / path[1:]).resolve()
+            if HERE / "novnc" in f.parents and f.is_file():
+                self._send(200, f.read_bytes(), STATIC_TYPES.get(f.suffix, "application/octet-stream"))
+            else:
+                self._send(404, b"not found", "text/plain")
+        elif path == "/api/launch":
+            self._json(LAUNCHER.status())
+        elif path == "/api/bots":
+            self._json({"bots": bot_list()})
+        elif path == "/api/geometry":
+            self._json({str(n): window_geometry(n) for n in range(1, SLOTS + 1)})
         elif path == "/api/slots":
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=SLOTS) as ex:
@@ -212,7 +252,28 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain")
 
+    def _body(self) -> dict:
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            return json.loads(self.rfile.read(n) or b"{}") if n else {}
+        except json.JSONDecodeError:
+            return {}
+
     def do_POST(self):
+        if self.path.startswith("/api/launch"):
+            body = self._body()
+            try:
+                if self.path == "/api/launch":
+                    return self._json(LAUNCHER.launch(
+                        [int(x) for x in body.get("slots", [])], str(body.get("bot", "")),
+                        float(body.get("minutes", 0)), bool(body.get("spread", True))))
+                if self.path == "/api/launch/stop":
+                    return self._json(LAUNCHER.stop([int(x) for x in body.get("slots", [])] or None))
+                if self.path == "/api/launch/clear":
+                    return self._json(LAUNCHER.clear_finished())
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            return self._json({"error": "bad path"}, 404)
         if self.path == "/api/update":
             # Copy the new code from the Windows folder into the VM and restart the bot apps.
             return self._json(start_update())
@@ -228,6 +289,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "unknown action"}, 400)
         res = subprocess.run(ACTIONS[action](n), capture_output=True, text=True)
         self._json({"ok": res.returncode == 0, "error": res.stderr.strip()})
+
+
+from launcher import Launcher  # noqa: E402  (same folder)
+
+LAUNCHER = Launcher(window_title, SLOTS)
 
 
 def main():

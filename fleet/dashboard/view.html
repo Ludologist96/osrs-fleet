@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSRS Screens</title>
+<style>
+  :root { --bg: #0c0b0a; --ink: #ece8e1; --muted: #9b958b; --accent: #d1a866; --line: #2e2b27; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+               font: 12px/1.3 ui-sans-serif, system-ui, "Segoe UI", sans-serif; overflow: hidden; }
+  #bar { height: 22px; display: flex; align-items: center; gap: 12px; padding: 0 8px; color: var(--muted); }
+  #bar a { color: var(--muted); }
+  #grid { position: absolute; top: 22px; left: 0; right: 0; bottom: 0; display: grid;
+          justify-content: center; align-content: start; gap: 2px; }
+  .tile { position: relative; overflow: hidden; background: #000; outline: 1px solid var(--line); }
+  .tile.focus { outline: 2px solid var(--accent); z-index: 1; }
+  .inner { position: absolute; }
+  .lbl { position: absolute; right: 3px; bottom: 2px; padding: 1px 5px; border-radius: 4px;
+         background: rgba(0,0,0,.6); color: var(--ink); pointer-events: none; font-size: 11px; }
+  .msg { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span>Click a screen to control it · keys go to the screen under the mouse</span>
+  <a href="/launcher">Launcher</a><a href="/">Dashboard</a>
+  <span id="info"></span>
+</div>
+<div id="grid"></div>
+<script type="module">
+import RFB from '/novnc/core/rfb.js';
+
+const params = new URLSearchParams(location.search);
+const SCREEN_W = 1280, SCREEN_H = 800;
+const grid = document.getElementById('grid');
+let slots = [], geom = {}, names = {}, tiles = {};
+
+async function getJSON(u) { const r = await fetch(u); return r.json(); }
+
+async function pickSlots() {
+  if (params.get('slots')) return params.get('slots').split(',').map(Number).filter(Boolean);
+  const s = await getJSON('/api/slots');
+  return s.slots.filter(x => x.account).map(x => x.slot);
+}
+
+function crop(n) {  // RuneLite window rect on the slot's screen (fallback: whole screen)
+  const g = geom[n]; return g ? g : { x: 0, y: 0, width: SCREEN_W, height: SCREEN_H };
+}
+
+function layout() {
+  if (!slots.length) return;
+  const W = grid.clientWidth, H = grid.clientHeight;
+  const cw = Math.max(...slots.map(n => crop(n).width)), ch = Math.max(...slots.map(n => crop(n).height));
+  let best = { s: 0, cols: 1 };
+  for (let cols = 1; cols <= slots.length; cols++) {
+    const rows = Math.ceil(slots.length / cols);
+    const s = Math.min((W - 2 * (cols - 1)) / (cols * cw), (H - 2 * (rows - 1)) / (rows * ch));
+    if (s > best.s) best = { s, cols };
+  }
+  const s = best.s;
+  grid.style.gridTemplateColumns = `repeat(${best.cols}, ${Math.floor(cw * s)}px)`;
+  for (const n of slots) {
+    const t = tiles[n], c = crop(n);
+    t.el.style.width = Math.floor(cw * s) + 'px'; t.el.style.height = Math.floor(ch * s) + 'px';
+    // the whole screen, scaled by s, shifted so the RuneLite window is at the tile's corner
+    t.inner.style.width = SCREEN_W * s + 'px'; t.inner.style.height = SCREEN_H * s + 'px';
+    t.inner.style.left = -c.x * s + 'px'; t.inner.style.top = -c.y * s + 'px';
+  }
+  document.getElementById('info').textContent = `${slots.length} screens · ${Math.round(s * 100)}%`;
+}
+
+function connect(n) {
+  const t = tiles[n];
+  if (t.rfb) { try { t.rfb.disconnect(); } catch (e) {} }
+  t.inner.innerHTML = '';
+  const url = `ws://${location.hostname}:6080/?token=slot${n}`;
+  const rfb = new RFB(t.inner, url, { shared: true });
+  rfb.scaleViewport = true; rfb.resizeSession = false; rfb.focusOnClick = true;
+  rfb.addEventListener('disconnect', () => { t.msg.textContent = 'reconnecting…'; t.msg.hidden = false;
+                                              setTimeout(() => connect(n), 3000); });
+  rfb.addEventListener('connect', () => { t.msg.hidden = true; });
+  t.rfb = rfb;
+}
+
+async function init() {
+  slots = await pickSlots();
+  const [g, s] = await Promise.all([getJSON('/api/geometry'), getJSON('/api/slots')]);
+  geom = g; for (const x of s.slots) names[x.slot] = x.account || '';
+  if (!slots.length) { grid.innerHTML = '<div class="msg">No logged-in slots.</div>'; return; }
+  for (const n of slots) {
+    const el = document.createElement('div'); el.className = 'tile';
+    const inner = document.createElement('div'); inner.className = 'inner';
+    const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.textContent = `${n} · ${names[n] || ''}`;
+    const msg = document.createElement('div'); msg.className = 'msg'; msg.textContent = 'connecting…';
+    el.append(inner, msg, lbl); grid.appendChild(el);
+    el.addEventListener('mouseenter', () => el.classList.add('focus'));
+    el.addEventListener('mouseleave', () => { el.classList.remove('focus'); tiles[n].rfb?.blur(); });
+    tiles[n] = { el, inner, msg, rfb: null };
+  }
+  layout();
+  for (const n of slots) connect(n);
+}
+
+window.addEventListener('resize', layout);
+// RuneLite windows move when their side panel opens: follow them.
+setInterval(async () => { try { const g = await getJSON('/api/geometry');
+  if (JSON.stringify(g) !== JSON.stringify(geom)) { geom = g; layout(); } } catch (e) {} }, 5000);
+init();
+</script>
+</body>
+</html>
