@@ -715,8 +715,7 @@ def main():
     me = tg("getMe", timeout=20).get("result", {})
     say(f"logged in as @{me.get('username')}; owner {STATE.get('owner') or '(none yet)'}")
     threading.Thread(target=watcher, daemon=True, name="watcher").start()
-    if STATE.get("owner") and uptime() < 900:
-        send("🟢 PC is on - OSRS fleet bot ready.", keyboard=MENU)
+    # no "PC is on" message at start (Igor 2026-10-18)
     offset = 0
     while True:
         try:
