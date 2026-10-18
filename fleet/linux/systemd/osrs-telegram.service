@@ -1,0 +1,12 @@
+[Unit]
+Description=OSRS fleet Telegram bot
+After=network-online.target osrs-dashboard.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/osrs/venv/bin/python /opt/osrs/app/fleet/telegram/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

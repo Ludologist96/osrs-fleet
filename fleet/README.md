@@ -135,8 +135,7 @@ Open **http://localhost:8000/launcher** (or the `OSRS Launcher` shortcut in
 Each account must already stand where its bot works (e.g. at marked trees).
 
 **Free roam** (first entry in the bot list) only logs the accounts in on a
-random F2P world, starts no bot and opens their screens, so you can walk them
-to their spots. Run time 0 = 24 h; press Stop when done (they stay logged in).
+random F2P world and starts no bot, so you can walk them to their spots. Run time 0 = 24 h; press Stop when done (they stay logged in).
 
 Every launch logs in on a random normal F2P world (Germany/UK). A bot that
 stops unexpectedly (an update, a crash) is restarted up to 3 times within 15
@@ -144,8 +143,35 @@ minutes. If login fails, the launcher shows the login screen's message (e.g.
 "Failed to login" = the saved login is stale: log that account in once on
 Windows through the Jagex Launcher, then copy its login to the slot again).
 
-**http://localhost:8000/view** shows every logged-in slot's game window in one
-browser page, scaled to fit. Click a screen to control it.
+The launcher page also shows the screens: every launched account (waiting,
+starting or running) gets a tile below the controls as soon as you press
+Launch, and its tile closes when its run ends. Click a screen to control it;
+"Hide controls" gives the screens the whole window. The top bar shows the
+VM's RAM and CPU use. Desktop shortcut: `fleet/windows/OSRS Fleet.url`
+(`/view` opens the same page).
+
+### Telegram bot (phone control)
+
+`fleet/telegram/bot.py` runs on the VM as the `osrs-telegram` service and
+talks to the dashboard, so it does what the launcher page does:
+
+- 🚀 Start bots (accounts → bot → run time → spread out → Start), 🧭 Free roam,
+  📊 Status, 📸 Screens (one picture of the launched accounts), ⏹ Stop.
+- ⋯ More: 📈 Resources (RAM/CPU per account), 🧹 Clear finished, 🔄 Update code.
+- It messages you by itself when a run finishes, a bot stops on its own and
+  is restarted (or gives up after 3 tries), or a login fails.
+
+Setup once: make a bot with @BotFather, copy `fleet/telegram/config.example.ini`
+to `fleet/telegram/config.ini` in the Windows code folder and paste the token
+(the file is never committed). The bot picks it up within a minute. The first
+private chat that writes to it becomes its owner; it ignores everyone else.
+Log: `http://localhost:8000/api/journal/osrs-telegram`.
+
+### How many accounts fit (resources)
+
+`http://localhost:8000/api/stats?min=10` gives the VM's RAM/CPU and each slot's
+average and peak over the last 10 minutes (a slot = all processes of its user
+`botN`: screen, VNC, RuneLite, bot app). The launcher's top bar shows the VM total.
 
 ### What every bot does to look human (woodcutter settings, per slot)
 

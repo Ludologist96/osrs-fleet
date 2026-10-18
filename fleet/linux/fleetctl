@@ -74,6 +74,8 @@ cmd_update() {
     systemctl restart osrs-websockify.service || true
     echo "Restarting bot apps and dashboard (RuneLite clients keep running)"
     for n in $(seq 1 "$SLOTS"); do systemctl restart "osrs-app@$n.service"; done
+    systemctl enable osrs-telegram.service >/dev/null 2>&1 || true
+    systemctl restart osrs-telegram.service || true
     systemctl restart osrs-dashboard.service
     echo "Updated."
 }
@@ -125,7 +127,8 @@ fleetctl - manage the OSRS fleet ($SLOTS slots)
   fleetctl start|stop|restart <N|all|2,5> [part]
                                         part = xvfb | wm | vnc | client | app
                                         (no part = the whole slot)
-  fleetctl update                       copy new code from D:\\OSRS and restart bot apps
+  fleetctl update                       copy new code from Windows and restart bot apps,
+                                        dashboard and Telegram bot
   fleetctl creds <N> [file]             give slot N the Jagex login saved by RuneLite
                                         on Windows (credentials.properties)
   fleetctl copy-settings <from> <to|all>

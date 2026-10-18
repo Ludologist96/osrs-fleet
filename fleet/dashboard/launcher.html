@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OSRS Launcher</title>
+<title>OSRS Fleet</title>
 <style>
   :root {
     --bg: #f4f2ee; --panel: #ffffff; --ink: #1d1b18; --muted: #6f6a62; --line: #e2ddd5;
     --ok: #2f7d4f; --warn: #b7791f; --bad: #b4382f; --idle: #8a8478; --accent: #7a5c2e;
+    --screens: #0c0b0a;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -16,104 +17,114 @@
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 14px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; padding: 18px 20px 4px; }
-  h1 { font-size: 20px; margin: 0; }
-  header a { color: var(--muted); font-size: 13px; }
-  main { display: grid; gap: 16px; padding: 12px 20px 28px; max-width: 980px;
-         grid-template-columns: minmax(0, 1fr); }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-  h2 { font-size: 15px; margin: 0 0 10px; }
-  .accts { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-  .acct { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--line);
-          border-radius: 8px; cursor: pointer; min-width: 0; }
-  .acct input { accent-color: var(--accent); }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
+         font: 13px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  #top { flex: none; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 14px 6px; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+  h1 { font-size: 15px; margin: 0; }
+  a { color: var(--muted); font-size: 12px; }
+  .grow { flex: 1; }
+  .small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .accts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .acct { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line);
+          border-radius: 7px; cursor: pointer; max-width: 210px; }
+  .acct input { accent-color: var(--accent); margin: 0; }
   .acct .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .acct .sl { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .acct .sl { color: var(--muted); font-size: 11px; }
   .acct.off { opacity: .45; cursor: not-allowed; }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 12px; }
-  label.f { display: flex; align-items: center; gap: 8px; }
-  select, input[type=number] { font: inherit; padding: 5px 8px; border-radius: 6px;
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 7px; }
+  label.f { display: flex; align-items: center; gap: 6px; }
+  select, input[type=number] { font: inherit; padding: 3px 6px; border-radius: 6px;
          border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  input[type=number] { width: 80px; }
-  button { font: inherit; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--line);
+  input[type=number] { width: 58px; }
+  button { font: inherit; padding: 4px 11px; border-radius: 7px; border: 1px solid var(--line);
            background: transparent; color: var(--ink); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
   button:hover { border-color: var(--accent); }
-  .small { font-size: 12px; color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .runs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .run { display: flex; align-items: center; gap: 7px; padding: 3px 4px 3px 8px; border: 1px solid var(--line);
+         border-radius: 7px; font-variant-numeric: tabular-nums; max-width: 100%; }
+  .run .m { color: var(--muted); font-size: 11px; max-width: 260px; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; }
+  .run button { padding: 1px 7px; font-size: 12px; }
   .st { font-weight: 600; }
   .st-running { color: var(--ok); } .st-waiting, .st-starting { color: var(--warn); }
   .st-error { color: var(--bad); } .st-done, .st-stopped { color: var(--idle); }
-  .err { color: var(--bad); margin-top: 8px; min-height: 1.2em; }
-  .empty { color: var(--muted); }
-  @media (max-width: 600px) { main, header { padding-left: 12px; padding-right: 12px; } }
+  .err { color: var(--bad); }
+  #top.min .hide-min { display: none; }
+  /* screens */
+  #grid { flex: 1; min-height: 0; background: var(--screens); display: grid; justify-content: center;
+          align-content: center; gap: 2px; position: relative; overflow: hidden; }
+  .tile { position: relative; overflow: hidden; background: #000; outline: 1px solid #2e2b27; }
+  .tile.focus { outline: 2px solid #d1a866; z-index: 1; }
+  .inner { position: absolute; }
+  .lbl { position: absolute; right: 3px; bottom: 2px; padding: 1px 5px; border-radius: 4px;
+         background: rgba(0,0,0,.6); color: #ece8e1; pointer-events: none; font-size: 11px; }
+  .msg { position: absolute; inset: 0; display: grid; place-items: center; color: #9b958b; text-align: center; padding: 10px; }
+  #empty { position: absolute; inset: 0; display: grid; place-items: center; color: #9b958b; font-size: 14px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>OSRS Launcher</h1>
-  <a href="/">Dashboard</a>
-  <a href="/view" id="viewlink">Screens</a>
-</header>
-<main>
-  <section>
-    <h2>Accounts</h2>
+<div id="top">
+  <div class="bar">
+    <h1>OSRS Fleet</h1>
+    <a href="/">Dashboard</a>
+    <span class="small" id="res"></span>
+    <span class="grow"></span>
+    <span class="small hide-min">Click a screen to control it · keys go to the screen under the mouse</span>
+    <button id="toggle" title="Hide or show the controls">Hide controls</button>
+  </div>
+  <div class="hide-min">
     <div class="accts" id="accts"><span class="small">Loading accounts…</span></div>
     <div class="row">
       <label class="f">Bot <select id="bot"></select></label>
       <label class="f">Run for <input type="number" id="hours" min="0" max="24" step="1" value="1"> h
         <input type="number" id="mins" min="0" max="59" step="5" value="0"> min</label>
-      <label class="f"><input type="checkbox" id="spread" checked> Spread out</label>
-    </div>
-    <div class="row">
+      <label class="f" title="Each account starts 1–4 min after the previous one, run times vary ±10%"><input type="checkbox" id="spread" checked> Spread out</label>
       <button class="primary" id="go">Launch</button>
       <button id="all">Select all</button>
-      <span class="small">Spread out: each account starts 1–4 min after the previous one, run times vary ±10%.
-        Each account must already be standing where its bot works.
-        Free roam: logs the accounts in (no bot, run time ignored if 0) and opens their screens, so you can walk them to their spots.</span>
+      <span class="err" id="err"></span>
     </div>
-    <div class="err" id="err"></div>
-  </section>
-  <section>
-    <div class="row" style="margin-top:0;justify-content:space-between">
-      <h2 style="margin:0">Running</h2>
-      <span>
-        <button id="openview">Open screens</button>
-        <button id="clear">Clear finished</button>
-        <button id="stopall">Stop all</button>
-      </span>
-    </div>
-    <table>
-      <thead><tr><th>Slot</th><th>Account</th><th>Bot</th><th>Status</th><th>Starts / stops in</th><th></th></tr></thead>
-      <tbody id="runs"></tbody>
-    </table>
-  </section>
-</main>
-<script>
+  </div>
+  <div class="row">
+    <div class="runs" id="runs"></div>
+    <span class="grow"></span>
+    <button id="clear" class="hide-min">Clear finished</button>
+    <button id="stopall">Stop all</button>
+  </div>
+</div>
+<div id="grid"><div id="empty">Start bots above — their screens show here.</div></div>
+
+<script type="module">
+import RFB from '/novnc/core/rfb.js';
+
 const $ = (id) => document.getElementById(id);
 const fmt = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
-  return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + x + 's'; };
-let runs = {};
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m ${String(x).padStart(2, '0')}s` : `${x}s`; };
+const gb = (b) => (b / 1073741824).toFixed(1);
+const ACTIVE = ['waiting', 'starting', 'running'];
+const SCREEN_W = 1280, SCREEN_H = 800;
+let runs = {}, names = {}, geom = {}, tiles = {}, shown = [];
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
 }
 
+// ------------------------------------------------------------- controls
 async function loadAccounts() {
   const [s, b] = await Promise.all([api('/api/slots'), api('/api/bots')]);
   const box = $('accts'); const checked = new Set([...box.querySelectorAll('input:checked')].map(i => i.value));
   box.innerHTML = '';
   for (const sl of s.slots) {
-    const name = sl.account; const busy = runs[sl.slot] && ['waiting', 'starting', 'running'].includes(runs[sl.slot].status);
+    names[sl.slot] = sl.account || '';
+    const name = sl.account; const busy = runs[sl.slot] && ACTIVE.includes(runs[sl.slot].status);
     const el = document.createElement('label'); el.className = 'acct' + (name && !busy ? '' : ' off');
-    el.innerHTML = `<input type="checkbox" value="${sl.slot}" ${name && !busy ? '' : 'disabled'} ${checked.has(String(sl.slot)) ? 'checked' : ''}>
-      <span class="nm"></span><span class="sl">slot ${sl.slot}</span>`;
-    el.querySelector('.nm').textContent = name || (busy ? 'launched' : 'no login');
+    el.innerHTML = `<input type="checkbox" value="${sl.slot}" ${name && !busy ? '' : 'disabled'} ${checked.has(String(sl.slot)) && !busy ? 'checked' : ''}>
+      <span class="sl">${sl.slot}</span><span class="nm"></span>`;
+    el.querySelector('.nm').textContent = name || 'no login';
+    if (busy) el.title = 'already launched';
     box.appendChild(el);
   }
   const sel = $('bot'); if (!sel.options.length) {
@@ -121,47 +132,139 @@ async function loadAccounts() {
     for (const x of b.bots) { const o = document.createElement('option'); o.value = x.id; o.textContent = x.name; sel.appendChild(o); }
     sel.value = localStorage.getItem('osrs-bot') || 'woodcutter';
   }
+  for (const n of shown) if (tiles[n]) tiles[n].lbl.textContent = `${n} · ${names[n] || ''}`;
 }
 
 async function loadRuns() {
-  const st = await api('/api/launch'); runs = st.runs; const tb = $('runs'); tb.innerHTML = '';
+  const st = await api('/api/launch'); runs = st.runs; const box = $('runs'); box.innerHTML = '';
   const keys = Object.keys(runs);
-  if (!keys.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Nothing launched.</td></tr>'; return; }
+  if (!keys.length) box.innerHTML = '<span class="small">Nothing launched.</span>';
   for (const k of keys) {
-    const r = runs[k]; const tr = document.createElement('tr');
+    const r = runs[k]; const el = document.createElement('div'); el.className = 'run';
     const when = r.status === 'waiting' ? 'starts in ' + fmt(r.starts_in)
-      : ['starting', 'running'].includes(r.status) ? 'stops in ' + fmt(r.stops_in) : '';
-    tr.innerHTML = `<td>${r.slot}</td><td class="a"></td><td>${r.bot}</td>
-      <td><span class="st st-${r.status}">${r.status}</span><div class="small m"></div></td><td>${when}</td>
-      <td>${['waiting', 'starting', 'running'].includes(r.status) ? '<button class="stop">Stop</button>' : ''}</td>`;
-    tr.querySelector('.a').textContent = r.account || '';
-    tr.querySelector('.m').textContent = r.msg || '';
-    const b = tr.querySelector('.stop'); if (b) b.onclick = () => api('/api/launch/stop', { slots: [r.slot] }).then(refresh);
-    tb.appendChild(tr);
+      : ACTIVE.includes(r.status) ? fmt(r.stops_in) + ' left' : '';
+    el.innerHTML = `<b>${r.slot}</b><span class="a"></span><span>${r.bot === 'freeroam' ? 'free roam' : r.bot}</span>
+      <span class="st st-${r.status}">${r.status}</span><span class="small">${when}</span><span class="m"></span>
+      ${ACTIVE.includes(r.status) ? '<button class="stop">Stop</button>' : ''}`;
+    el.querySelector('.a').textContent = r.account || '';
+    el.querySelector('.m').textContent = r.msg || ''; el.querySelector('.m').title = r.msg || '';
+    const b = el.querySelector('.stop'); if (b) b.onclick = () => api('/api/launch/stop', { slots: [r.slot] }).then(refresh);
+    box.appendChild(el);
   }
+  syncScreens();
 }
 
-function runningSlots() { return Object.values(runs).filter(r => ['starting', 'running', 'waiting'].includes(r.status)).map(r => r.slot); }
+async function loadStats() {
+  try {
+    const s = await api('/api/stats?min=5'); const v = s.vm;
+    let t = `VM RAM ${gb(v.ram_used)} / ${gb(v.ram_total)} GB · CPU ${Math.round(v.cpu_avg ?? 0)}% of ${v.cpu_threads} threads`;
+    if (v.swap_used > 104857600) t += ` · swap ${gb(v.swap_used)} GB`;
+    $('res').textContent = t;
+  } catch (e) { $('res').textContent = ''; }
+}
 
-async function refresh() { try { await loadRuns(); await loadAccounts(); } catch (e) { $('err').textContent = e.message; } }
+async function refresh() { try { await loadRuns(); await loadAccounts(); $('err').textContent = ''; } catch (e) { $('err').textContent = e.message; } }
 
 $('go').onclick = async () => {
   $('err').textContent = '';
   const slots = [...document.querySelectorAll('#accts input:checked')].map(i => +i.value);
   const minutes = (+$('hours').value || 0) * 60 + (+$('mins').value || 0);
-  localStorage.setItem('osrs-bot', $('bot').value);
   const bot = $('bot').value;
-  if (bot === 'freeroam') { localStorage.setItem('osrs-bot', 'woodcutter'); }
+  localStorage.setItem('osrs-bot', bot === 'freeroam' ? (localStorage.getItem('osrs-bot') || 'woodcutter') : bot);
   try { await api('/api/launch', { slots, bot, minutes, spread: $('spread').checked });
-        document.querySelectorAll('#accts input').forEach(i => i.checked = false); await refresh();
-        if (bot === 'freeroam') window.open('/view?slots=' + slots.join(','), 'osrs-view'); }
+        document.querySelectorAll('#accts input').forEach(i => i.checked = false); await refresh(); }
   catch (e) { $('err').textContent = e.message; }
 };
 $('all').onclick = () => document.querySelectorAll('#accts input:not(:disabled)').forEach(i => i.checked = true);
-$('stopall').onclick = () => api('/api/launch/stop', { slots: [] }).then(refresh);
+$('stopall').onclick = () => { if (confirm('Stop all launched bots?')) api('/api/launch/stop', { slots: [] }).then(refresh); };
 $('clear').onclick = () => api('/api/launch/clear', {}).then(refresh);
-$('openview').onclick = () => { const s = runningSlots(); window.open('/view' + (s.length ? '?slots=' + s.join(',') : ''), 'osrs-view'); };
-refresh(); setInterval(loadRuns, 1000); setInterval(loadAccounts, 10000);
+
+function setMin(min) {
+  $('top').classList.toggle('min', min); $('toggle').textContent = min ? 'Show controls' : 'Hide controls';
+  try { localStorage.setItem('osrs-min', min ? '1' : ''); } catch (e) {}
+  layout();
+}
+$('toggle').onclick = () => setMin(!$('top').classList.contains('min'));
+try { if (localStorage.getItem('osrs-min')) setMin(true); } catch (e) {}
+
+// ------------------------------------------------------------- screens
+// Shown: every slot that is launched (waiting, starting or running).
+function wanted() {
+  return Object.values(runs).filter(r => ACTIVE.includes(r.status)).map(r => r.slot).sort((a, b) => a - b);
+}
+
+function syncScreens() {
+  const want = wanted();
+  if (want.join() === shown.join()) return;
+  for (const n of shown) if (!want.includes(n)) {             // no longer launched: close
+    const t = tiles[n]; t.closing = true; try { t.rfb?.disconnect(); } catch (e) {} t.el.remove(); delete tiles[n];
+  }
+  for (const n of want) if (!tiles[n]) {                      // newly launched: open
+    const el = document.createElement('div'); el.className = 'tile';
+    const inner = document.createElement('div'); inner.className = 'inner';
+    const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.textContent = `${n} · ${names[n] || ''}`;
+    const msg = document.createElement('div'); msg.className = 'msg'; msg.textContent = 'connecting…';
+    el.append(inner, msg, lbl);
+    el.addEventListener('mouseenter', () => el.classList.add('focus'));
+    el.addEventListener('mouseleave', () => { el.classList.remove('focus'); tiles[n]?.rfb?.blur(); });
+    tiles[n] = { el, inner, msg, lbl, rfb: null };
+    connect(n);
+  }
+  shown = want;
+  const grid = $('grid');
+  for (const n of shown) grid.appendChild(tiles[n].el);      // keep slot order
+  $('empty').style.display = shown.length ? 'none' : '';
+  layout();
+}
+
+function crop(n) {  // RuneLite window rect on the slot's screen (fallback: whole screen)
+  const g = geom[n]; return g ? g : { x: 0, y: 0, width: SCREEN_W, height: SCREEN_H };
+}
+
+function layout() {
+  if (!shown.length) return;
+  const grid = $('grid'); const W = grid.clientWidth, H = grid.clientHeight;
+  const cw = Math.max(...shown.map(n => crop(n).width)), ch = Math.max(...shown.map(n => crop(n).height));
+  let best = { s: 0, cols: 1 };
+  for (let cols = 1; cols <= shown.length; cols++) {
+    const rows = Math.ceil(shown.length / cols);
+    const s = Math.min((W - 2 * (cols - 1)) / (cols * cw), (H - 2 * (rows - 1)) / (rows * ch));
+    if (s > best.s) best = { s, cols };
+  }
+  const s = best.s;
+  grid.style.gridTemplateColumns = `repeat(${best.cols}, ${Math.floor(cw * s)}px)`;
+  for (const n of shown) {
+    const t = tiles[n], c = crop(n);
+    t.el.style.width = Math.floor(cw * s) + 'px'; t.el.style.height = Math.floor(ch * s) + 'px';
+    // the whole screen, scaled by s, shifted so the RuneLite window is at the tile's corner
+    t.inner.style.width = SCREEN_W * s + 'px'; t.inner.style.height = SCREEN_H * s + 'px';
+    t.inner.style.left = -c.x * s + 'px'; t.inner.style.top = -c.y * s + 'px';
+  }
+}
+
+function connect(n) {
+  const t = tiles[n]; if (!t || t.closing) return;
+  if (t.rfb) { try { t.rfb.disconnect(); } catch (e) {} }
+  t.inner.innerHTML = '';
+  const rfb = new RFB(t.inner, `ws://${location.host}/ws/slot${n}`, { shared: true });
+  rfb.scaleViewport = true; rfb.resizeSession = false; rfb.focusOnClick = true;
+  rfb.addEventListener('disconnect', () => { if (t.closing || tiles[n] !== t) return;
+    t.msg.textContent = 'reconnecting…'; t.msg.style.display = ''; setTimeout(() => connect(n), 3000); });
+  rfb.addEventListener('connect', () => { t.msg.style.display = 'none'; });
+  t.rfb = rfb;
+}
+
+new ResizeObserver(layout).observe($('grid'));
+// RuneLite windows move when their side panel opens: follow them.
+async function loadGeom() { try { const g = await api('/api/geometry');
+  if (JSON.stringify(g) !== JSON.stringify(geom)) { geom = g; layout(); } } catch (e) {} }
+
+await loadGeom();
+refresh(); loadStats();
+setInterval(() => loadRuns().catch(() => {}), 1000);
+setInterval(() => loadAccounts().catch(() => {}), 10000);
+setInterval(loadGeom, 5000);
+setInterval(loadStats, 10000);
 </script>
 </body>
 </html>

@@ -187,3 +187,6 @@ data/configs/slot*/
 
 # vendored noVNC (browser screen view) needs its lib/ folder
 !fleet/dashboard/novnc/**/lib/
+
+# Telegram bot token (fleet/telegram/config.ini)
+fleet/telegram/config.ini

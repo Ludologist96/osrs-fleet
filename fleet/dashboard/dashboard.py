@@ -249,7 +249,8 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
         elif path in ("/launcher", "/view"):
-            self._send(200, (HERE / f"{path[1:]}.html").read_bytes(), "text/html; charset=utf-8")
+            # one page: launch controls on top, the launched accounts' screens below
+            self._send(200, (HERE / "launcher.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/novnc/"):
             f = (HERE / path[1:]).resolve()
             if HERE / "novnc" in f.parents and f.is_file():
@@ -258,6 +259,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"not found", "text/plain")
         elif path == "/api/launch":
             self._json(LAUNCHER.status())
+        elif path == "/api/stats":
+            # RAM / CPU of the VM and of every slot (averages over ?min=N minutes, default 10)
+            mm = re.search(r"(?:^|&)min=([0-9.]+)", query)
+            self._json(STATS.snapshot(float(mm.group(1)) if mm else 10))
         elif path == "/api/bots":
             self._json({"bots": bot_list()})
         elif m := re.fullmatch(r"/api/slot/(\d+)/world", path):
@@ -347,6 +352,10 @@ class Handler(BaseHTTPRequestHandler):
 from launcher import Launcher  # noqa: E402  (same folder)
 
 LAUNCHER = Launcher(window_title, SLOTS)
+
+from stats import Stats  # noqa: E402
+
+STATS = Stats(SLOTS)
 
 
 def main():
