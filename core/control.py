@@ -22,10 +22,8 @@ class ScriptControl(metaclass=SingletonMeta):
         self._pause = False
         self.break_until: float = 0
         self.break_config: BreakCfgParam = None
-        # No random breaks during the first minutes after a bot starts
-        # (a player who just sat down doesn't stop after 20 seconds).
-        self.break_grace_seconds: float = float(os.environ.get("OSRS_BREAK_GRACE", 300))
-        self.started_at: float = time.time()
+        # After a break ends, no new break for this long (seconds).
+        self.break_cooldown_seconds: float = float(os.environ.get("OSRS_BREAK_COOLDOWN", 180))
         self.log = get_logger("ScriptControl")
         self._listener: threading.Thread = None
         
@@ -51,7 +49,8 @@ class ScriptControl(metaclass=SingletonMeta):
     def propose_break(self):
         """Propose break based on configuration."""
         if self.break_config:
-            if time.time() - self.started_at < self.break_grace_seconds:
+            # break_until is when the last break ended (0 = none yet)
+            if time.time() < self.break_until + self.break_cooldown_seconds:
                 return
             if self.break_config.should_break():
                 sec = int(self.break_config.break_duration.choose())
@@ -140,7 +139,6 @@ class ScriptControl(metaclass=SingletonMeta):
         self._terminate = False
         self._pause = False
         self.break_until = 0
-        self.started_at = time.time()
         
         # Ensure listener thread calls are responsive
         self.start_listener()
