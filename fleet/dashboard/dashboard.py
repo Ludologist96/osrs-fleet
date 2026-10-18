@@ -13,6 +13,8 @@ import io
 import json
 import os
 import re
+import select
+import socket
 import subprocess
 import threading
 import time
@@ -38,6 +40,8 @@ def read_conf() -> dict:
 CONF = read_conf()
 SLOTS = int(CONF.get("SLOTS", 8))
 PORT = int(CONF.get("DASHBOARD_PORT", 8000))
+
+WS_PORT = 5980  # websockify (osrs-websockify.service)
 
 STATIC_TYPES = {".js": "application/javascript", ".html": "text/html; charset=utf-8",
                 ".css": "text/css", ".txt": "text/plain"}
@@ -207,8 +211,41 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode(), "application/json")
 
+    def _proxy_ws(self, n: int):
+        """Pass a browser WebSocket for slot N's screen through to websockify, so the
+        screen view works from this page's own address (port 8000)."""
+        try:
+            up = socket.create_connection(("127.0.0.1", WS_PORT), timeout=5)
+        except OSError:
+            return self._send(502, b"screen bridge not running", "text/plain")
+        head = f"GET /?token=slot{n} HTTP/1.1\r\n"
+        for k, v in self.headers.items():
+            head += f"{k}: {v}\r\n"
+        up.sendall((head + "\r\n").encode())
+        down = self.connection
+        up.settimeout(None)
+        down.settimeout(None)
+        socks = [down, up]
+        try:
+            while True:
+                readable, _, _ = select.select(socks, [], [], 60)
+                if not readable:
+                    continue
+                for src in readable:
+                    data = src.recv(65536)
+                    if not data:
+                        return
+                    (up if src is down else down).sendall(data)
+        except OSError:
+            pass
+        finally:
+            up.close()
+            self.close_connection = True
+
     def do_GET(self):
         path, _, query = self.path.partition("?")
+        if (m := re.fullmatch(r"/ws/slot(\d+)", path)) and "websocket" in self.headers.get("Upgrade", "").lower():
+            return self._proxy_ws(int(m.group(1)))
         if path in ("/", "/index.html"):
             self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
         elif path in ("/launcher", "/view"):

@@ -74,7 +74,7 @@ function connect(n) {
   const t = tiles[n];
   if (t.rfb) { try { t.rfb.disconnect(); } catch (e) {} }
   t.inner.innerHTML = '';
-  const url = `ws://${location.hostname}:5980/?token=slot${n}`;
+  const url = `ws://${location.host}/ws/slot${n}`;
   const rfb = new RFB(t.inner, url, { shared: true });
   rfb.scaleViewport = true; rfb.resizeSession = false; rfb.focusOnClick = true;
   rfb.addEventListener('disconnect', () => { t.msg.textContent = 'reconnecting…'; t.msg.hidden = false;
