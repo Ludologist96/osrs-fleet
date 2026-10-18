@@ -1,9 +1,9 @@
 [Unit]
-Description=OSRS fleet - browser access to the slot screens (noVNC bridge on port 6080)
+Description=OSRS fleet - browser access to the slot screens (noVNC bridge on port 5980)
 After=network.target
 
 [Service]
-ExecStart=/opt/osrs/venv/bin/websockify --token-plugin TokenFile --token-source /etc/osrs/vnc-tokens 127.0.0.1:6080
+ExecStart=/opt/osrs/venv/bin/websockify --token-plugin TokenFile --token-source /etc/osrs/vnc-tokens 0.0.0.0:5980
 Restart=always
 RestartSec=3
 
