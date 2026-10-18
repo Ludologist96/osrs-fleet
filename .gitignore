@@ -190,3 +190,6 @@ data/configs/slot*/
 
 # Telegram bot token (fleet/telegram/config.ini)
 fleet/telegram/config.ini
+
+# item icon cache (core/item_db.py IconStore)
+data/items/icons.sqlite

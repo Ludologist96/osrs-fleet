@@ -285,6 +285,18 @@ class Handler(BaseHTTPRequestHandler):
                 out[f] = [l for l in Path(f).read_text(errors="replace").splitlines()
                           if l.startswith(("defaultworld.", "runelite.defaultworldplugin"))]
             self._json({"files": out, "f2p_worlds": __import__("launcher").f2p_worlds()})
+        elif m := re.fullmatch(r"/api/slot/(\d+)/rlsettings", path):
+            # read-only: RuneLite settings lines of slot N that contain ?q=... (e.g. gpu, fps)
+            import glob, urllib.parse
+            n = int(m.group(1))
+            q = urllib.parse.parse_qs(query).get("q", [""])[0].lower()
+            out = {}
+            for f in glob.glob(f"/home/bot{n}/.runelite/profiles2/*.properties") + \
+                    glob.glob(f"/home/bot{n}/.runelite/settings.properties"):
+                lines = [l for l in Path(f).read_text(errors="replace").splitlines()
+                         if q and q in l.lower() and "password" not in l.lower() and "token" not in l.lower()]
+                out[f] = lines[:200]
+            self._json(out)
         elif path == "/api/geometry":
             self._json({str(n): window_geometry(n) for n in range(1, SLOTS + 1)})
         elif path == "/api/slots":

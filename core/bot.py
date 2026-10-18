@@ -8,6 +8,7 @@ from core.api import BotAPI
 from core.logger import get_logger
 from core import cv_debug
 from core import instance
+import os
 
 class Bot:
     def __init__(self, user='', break_cfg: BreakCfgParam = None, long_break_cfg: BreakCfgParam = None,
@@ -33,9 +34,12 @@ class Bot:
         self.control.on_short_break_chance = float(break_ui_browse_chance)
         
         self.api = BotAPI(self.client)
-        # Always enable CV debug for bot monitoring
+        # CV debug keeps copies of screenshots and PNG-encodes them (~hundreds of MB and
+        # CPU per bot). On the fleet nobody watches it, so it stays off unless
+        # OSRS_CV_DEBUG=1 (fleet.conf CV_DEBUG=1) or the web UI's CV debug switch turns it on.
         debug_port = instance.port(5555)  # shifted per fleet slot
-        if not cv_debug._enabled:
+        want_debug = os.environ.get("OSRS_CV_DEBUG", "0" if instance.IS_FLEET else "1") == "1"
+        if want_debug and not cv_debug._enabled:
             cv_debug.enable(port=debug_port)
             self.log.info(f"CV Debug enabled on port {debug_port}")
         

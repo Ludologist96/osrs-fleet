@@ -1,5 +1,10 @@
 import json
-from dataclasses import dataclass
+import os
+import sqlite3
+import sys
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Optional, Any, List
 from core.logger import get_logger
 from PIL import Image
@@ -9,7 +14,10 @@ from core import tools
 from core import ocr
 from core.logger import get_logger
 
-@dataclass
+_DC_SLOTS = {"slots": True} if sys.version_info >= (3, 10) else {}
+
+
+@dataclass(**_DC_SLOTS)
 class Item:
     """
     Represents an in-game item with its attributes.
@@ -26,8 +34,17 @@ class Item:
     cost: int
     lowalch: int
     highalch: int
-    icon_b64: Optional[str] = None
-    log = get_logger('Item')
+    # The icon is loaded from the icon cache the first time it is used (only a few
+    # items per bot), not for all ~43k items at start - that kept ~100+ MB per process.
+    _icon: Optional[str] = field(default=None, repr=False, compare=False)
+    _icon_loaded: bool = field(default=False, repr=False, compare=False)
+
+    @property
+    def icon_b64(self) -> Optional[str]:
+        if not self._icon_loaded:
+            self._icon = IconStore.get().cropped(self.id)
+            self._icon_loaded = True
+        return self._icon
 
     @property
     def icon(self) -> Image.Image:
@@ -37,6 +54,10 @@ class Item:
         if self.icon_b64:
             return Image.open(BytesIO(base64.b64decode(self.icon_b64)))
         return None
+
+    @property
+    def log(self):
+        return get_logger('Item')
     
     def get_count(self, item_match: tools.MatchResult, sc: Image.Image) -> int:
         """
@@ -70,6 +91,75 @@ class Item:
             match.debug_draw(sc).show()
             return 0
 
+ICONS_JSON = Path("data/items/icons-items-complete.json")
+
+
+class IconStore:
+    """Item icons in a small SQLite file next to the JSON (or in $OSRS_CACHE_DIR), built
+    once from icons-items-complete.json. A lookup reads one row, so a process holds only
+    the icons it actually uses."""
+    _instance: "IconStore | None" = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get(cls) -> "IconStore":
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = IconStore()
+            return cls._instance
+
+    def __init__(self):
+        cache_dir = Path(os.environ.get("OSRS_CACHE_DIR") or ICONS_JSON.parent)
+        self.path = cache_dir / "icons.sqlite"
+        self._local = threading.local()
+        self._ensure()
+
+    def _ensure(self):
+        try:
+            if self.path.exists() and self.path.stat().st_mtime >= ICONS_JSON.stat().st_mtime:
+                return
+        except OSError:
+            pass
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
+        with open(ICONS_JSON, "r") as f:
+            icons = json.load(f)
+        con = sqlite3.connect(tmp)
+        con.execute("CREATE TABLE icons (id INTEGER PRIMARY KEY, b64 TEXT)")
+        con.executemany("INSERT INTO icons VALUES (?, ?)",
+                        ((int(k), v) for k, v in icons.items() if v and k.isdigit()))
+        con.commit()
+        con.close()
+        del icons
+        os.replace(tmp, self.path)   # atomic: several processes may build at once
+        try:
+            os.chmod(self.path, 0o664)
+        except OSError:
+            pass
+
+    def _con(self) -> sqlite3.Connection:
+        con = getattr(self._local, "con", None)
+        if con is None:
+            con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, check_same_thread=False)
+            self._local.con = con
+        return con
+
+    def raw(self, item_id: int) -> Optional[str]:
+        row = self._con().execute("SELECT b64 FROM icons WHERE id = ?", (item_id,)).fetchone()
+        return row[0] if row else None
+
+    def cropped(self, item_id: int) -> Optional[str]:
+        b64 = self.raw(item_id)
+        if not b64:
+            return None
+        from core.tools import base64_to_image, crop_transparent_border, image_to_base64
+        try:
+            return image_to_base64(crop_transparent_border(base64_to_image(b64)), fmt="PNG")
+        except Exception:
+            return b64
+
+
+
 class ItemLookup:
     """
     Singleton class for looking up items in the OSRS database.
@@ -100,23 +190,6 @@ class ItemLookup:
             with open("data/items/items-cache-data.json", "r") as f:
                 items_data = json.load(f)
 
-            with open("data/items/icons-items-complete.json", "r") as f:
-                icons_data = json.load(f)
-
-            # Import here to avoid circulars at module import time
-            from core.tools import base64_to_image, crop_transparent_border, image_to_base64
-
-            def _crop_icon(b64: Optional[str], item_id: int, item_name: str) -> Optional[str]:
-                if not b64:
-                    return None
-                try:
-                    img = base64_to_image(b64)
-                    cropped = crop_transparent_border(img)
-                    return image_to_base64(cropped, fmt="PNG")
-                except Exception as e:
-                    self.log.debug(f"Icon crop failed for item {item_id} - {item_name}: {e}")
-                    return b64
-
             # Pass 1: load canonicals
             for item in items_data.values():
                 # Filter out duplicates: only include items with linked_id_item=None and linked_id_placeholder!=None
@@ -134,7 +207,6 @@ class ItemLookup:
                         cost=item["cost"],
                         lowalch=item["lowalch"],
                         highalch=item["highalch"],
-                        icon_b64=_crop_icon(icons_data.get(str(item["id"])), item["id"], item["name"]),
                     )
 
                     # Populate lookup dictionaries
@@ -163,7 +235,6 @@ class ItemLookup:
                     cost=raw["cost"],
                     lowalch=raw["lowalch"],
                     highalch=raw["highalch"],
-                    icon_b64=_crop_icon(icons_data.get(str(noted_id)), noted_id, raw["name"]),
                 )
 
         except Exception as e:

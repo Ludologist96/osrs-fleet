@@ -51,8 +51,16 @@ case "$comp" in
         else
             sleep $(( (n - 1) * ${CLIENT_START_GAP:-20} ))
         fi
+        # Java options for the game itself (not the launcher), passed with -J. They come
+        # after RuneLite's own (-Xmx768m ...), so ours win. Fewer malloc arenas = less RAM.
+        export MALLOC_ARENA_MAX=2
+        jargs=()
+        cjvm=${CLIENT_JVM_ARGS--Xmx512m -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m}
+        for a in $cjvm; do
+            jargs+=("-J$a")
+        done
         # shellcheck disable=SC2086
-        java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar || true
+        java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar "${jargs[@]}" || true
         # The launcher starts the game in a second Java process and exits.
         # Stay alive while the game runs: when this script ends, systemd stops
         # everything it started, the game included, and restarts it in a loop.
@@ -65,6 +73,9 @@ case "$comp" in
         wait_display
         cd "$APP_DIR"
         export OSRS_SLOT="$n"
+        export OSRS_CV_DEBUG="${CV_DEBUG:-0}"          # CV debug viewer off unless CV_DEBUG=1
+        export OSRS_CACHE_DIR=/var/lib/osrs/cache      # shared item icon cache
+        export MALLOC_ARENA_MAX=2                      # fewer malloc arenas = less RAM
         exec /opt/osrs/venv/bin/python main.py --port $((8010 + n))
         ;;
     *)

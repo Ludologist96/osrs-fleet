@@ -53,6 +53,7 @@ cmd_update() {
         --exclude 'data/configs/slot*/' \
         "$src/" "$APP_DIR/"
     chown -R root:osrs "$APP_DIR"; chmod -R g+rwX "$APP_DIR"
+    install -d -m 2775 -o root -g osrs /var/lib/osrs/cache   # shared item icon cache
     install -m 755 "$src/fleet/linux/slot" /opt/osrs/bin/slot
     install -m 755 "$src/fleet/linux/fleetctl" /opt/osrs/bin/fleetctl
     new_sha=$(sha256sum "$APP_DIR/requirements.txt" | cut -d' ' -f1)

@@ -24,7 +24,8 @@ _MAX_ITEMS = 20
 _items: deque[Dict[str, Any]] = deque(maxlen=_MAX_ITEMS)
 
 # Task queue for the worker thread (drop if full to avoid slowing main)
-_tasks: Queue[Tuple[Image.Image, Image.Image, MatchResult]] = Queue(maxsize=200)
+# Each task holds a full screenshot copy (~3 MB): keep the backlog short.
+_tasks: Queue[Tuple[Image.Image, Image.Image, MatchResult]] = Queue(maxsize=8)
 
 # SSE publisher for connected clients
 class _Publisher:
