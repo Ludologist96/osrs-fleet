@@ -10,7 +10,7 @@ from core import cv_debug
 from core import instance
 
 class Bot:
-    def __init__(self, user='', break_cfg: BreakCfgParam = None):
+    def __init__(self, user='', break_cfg: BreakCfgParam = None, long_break_cfg: BreakCfgParam = None):
         self.log = get_logger(getattr(self, 'name', 'Bot'))
         self.control = ScriptControl()
         # Clear script control state on start
@@ -23,6 +23,10 @@ class Bot:
 
         if break_cfg:
             self.control.break_config = break_cfg
+        # Long break (AFK 10-15 min): the game logs the character out meanwhile,
+        # so log in again before the bot's next action.
+        self.control.long_break_config = long_break_cfg
+        self.control.after_long_break = self._log_back_in
         
         self.api = BotAPI(self.client)
         # Always enable CV debug for bot monitoring
@@ -37,6 +41,13 @@ class Bot:
         self.api.start(port=instance.port(5432))
         
         
+    def _log_back_in(self):
+        from core import login
+        result = login.login()
+        if result.get("state") != "game":
+            raise RuntimeError(f"still not in game: {result}")
+        self.log.info("Back in the game")
+
     @property
     def terminate(self) -> bool:
         return self.control.terminate

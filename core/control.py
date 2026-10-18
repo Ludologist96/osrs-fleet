@@ -24,6 +24,16 @@ class ScriptControl(metaclass=SingletonMeta):
         self.break_config: BreakCfgParam = None
         # After a break ends, no new break for this long (seconds).
         self.break_cooldown_seconds: float = float(os.environ.get("OSRS_BREAK_COOLDOWN", 180))
+        # Long breaks (AFK long enough to get logged out): own chance/duration and
+        # a long cooldown counted from the end of the previous long break.
+        self.long_break_config: BreakCfgParam = None
+        self.long_break_cooldown_seconds: float = float(os.environ.get("OSRS_LONG_BREAK_COOLDOWN", 90 * 60))
+        self.long_break_end: float = 0
+        # Called (once, before the next guarded action) after a long break, e.g. to log in again.
+        self.after_long_break = None
+        self._relogin_needed = False
+        self._relogging = False
+        self._relogin_lock = threading.RLock()
         self.log = get_logger("ScriptControl")
         self._listener: threading.Thread = None
         
@@ -50,7 +60,19 @@ class ScriptControl(metaclass=SingletonMeta):
         """Propose break based on configuration."""
         if self.break_config:
             # break_until is when the last break ended (0 = none yet)
-            if time.time() < self.break_until + self.break_cooldown_seconds:
+            now = time.time()
+            if now < self.break_until:
+                return  # already on a break
+            lb = self.long_break_config
+            if (lb and now >= self.long_break_end + self.long_break_cooldown_seconds
+                    and lb.should_break()):
+                sec = int(lb.break_duration.choose())
+                self.initialize_break(sec)
+                self.long_break_end = self.break_until
+                self._relogin_needed = True
+                self.log.info(f"Long break: going AFK for {sec // 60} min {sec % 60} s.")
+                return
+            if now < self.break_until + self.break_cooldown_seconds:
                 return
             if self.break_config.should_break():
                 sec = int(self.break_config.break_duration.choose())
@@ -139,6 +161,8 @@ class ScriptControl(metaclass=SingletonMeta):
         self._terminate = False
         self._pause = False
         self.break_until = 0
+        self.long_break_end = 0
+        self._relogin_needed = False
         
         # Ensure listener thread calls are responsive
         self.start_listener()
@@ -152,6 +176,24 @@ class ScriptControl(metaclass=SingletonMeta):
     def initialize_break(self, seconds: int):
         """Set the break duration without causing the caller to sleep."""
         self.break_until = time.time() + int(seconds)
+
+    def _after_long_break(self):
+        # One thread runs the hook; other threads wait for it to finish.
+        # RLock: the hook's own guarded calls (clicks) pass straight through.
+        with self._relogin_lock:
+            if not self._relogin_needed:
+                return
+            if self.after_long_break:
+                self.log.info("Long break over: getting back into the game")
+                self._relogging = True
+                self._relogin_needed = False
+                try:
+                    self.after_long_break()
+                except Exception:
+                    self.log.error("Couldn't get back into the game after the long break", exc_info=True)
+                finally:
+                    self._relogging = False
+            self._relogin_needed = False
 
     def guard(self, func):
         """
@@ -167,6 +209,8 @@ class ScriptControl(metaclass=SingletonMeta):
                 time.sleep(1)
             if self.terminate:
                 raise ScriptTerminationException()
+            if self._relogin_needed or self._relogging:
+                self._after_long_break()
             return func(*args, **kwargs)
         return wrapper
 

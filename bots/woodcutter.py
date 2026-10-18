@@ -40,6 +40,12 @@ class BotConfig(BotConfigMixin):
         RangeParam(10, 30),  # break duration range in seconds
         FloatParam(0.01)     # break chance
     )
+    # Long break: AFK long enough to get logged out (logs back in after),
+    # at most once every 90 minutes.
+    long_break_cfg: BreakCfgParam = BreakCfgParam(
+        RangeParam(600, 900),  # 10-15 minutes
+        FloatParam(0.01)
+    )
 
     ###########################################
     # Willows at Draynor Village
@@ -108,7 +114,7 @@ class BotExecutor(Bot):
     
     
     def __init__(self, config: BotConfig, user=''):
-        super().__init__(user, break_cfg=config.break_cfg)
+        super().__init__(user, break_cfg=config.break_cfg, long_break_cfg=config.long_break_cfg)
         self.cfg: BotConfig = config
         self.log = get_logger('WoodcutterBot')
         self.consecutive_failures = 0
