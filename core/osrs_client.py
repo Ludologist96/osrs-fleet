@@ -894,7 +894,10 @@ class RuneLiteClient(GenericWindow):
                 break
         
         if skill_match is None:
-            raise ValueError(f"Could not find skilling state for substring: {substring}")
+            # The fixed-size box template only matches one overlay size; RuneLite's
+            # session overlays grow with their text (e.g. "Logs cut: 12"). Fall back
+            # to reading the overlay area in the top-left corner of the game view.
+            return self._skilling_state_from_corner(sc, substring)
         
         img = skill_match.crop_in(sc)
         # find red pixel in the image
@@ -910,6 +913,27 @@ class RuneLiteClient(GenericWindow):
 
         raise ValueError(f"Could not determine skilling state for substring: {substring}. No red or green pixels found in {img.size} image.")
         
+    def _skilling_state_from_corner(self, sc: Image.Image, substring: str) -> bool:
+        """Skilling state from the RuneLite overlay in the top-left of the game view:
+        green title ("Woodcutting") = busy, red ("NOT woodcutting") = idle."""
+        corner = sc.crop((0, 0, min(320, sc.width), min(170, sc.height)))
+        text_img = tools.mask_colors(corner, [[255, 255, 255], [255, 0, 0], [0, 255, 0]])
+        text = ocr.execute(
+            text_img,
+            font=ocr.FontChoice.RUNESCAPE_PLAIN_12,
+            psm=ocr.TessPsm.SPARSE_TEXT,
+            raise_on_blank=False,
+        ) or ''
+        if substring.lower() not in text.lower():
+            raise ValueError(f"Could not find skilling state for substring: {substring}")
+        arr = np.asarray(corner.convert('RGB')).astype(int)
+        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+        green = int(np.sum((g > 200) & (r < 70) & (b < 70)))
+        red = int(np.sum((r > 200) & (g < 70) & (b < 70)))
+        if green == 0 and red == 0:
+            raise ValueError(f"Could not determine skilling state for substring: {substring}")
+        return green > red
+
     @control.guard
     def is_moving(self, sleep_between=.8, retry_cnt=2) -> bool:
         """
