@@ -182,8 +182,11 @@ Slot N still uses screen :N, VNC 5900+N and bot UI 8010+N (slot 12 = 8022).
 Each new account then needs its login once: log it in via the Jagex Launcher on
 Windows (RuneLite), close RuneLite, then press "copy login" on that slot in the
 launcher page (one account at a time - it copies the login Windows saved last).
-Oct 2026, home PC (9800X3D with SMT on, 32 GB, VM 24 GB / 14 threads): 8 woodcutters
-used ~13 GB and ~2.3 threads, so it runs 12 slots; RAM is the limit.
+Oct 2026, home PC (9800X3D with SMT on, 32 GB, VM 24 GB / 14 threads): a woodcutting
+slot used ~1.7 GB (RuneLite ~780 MB, bot app ~700 MB). After the RAM fixes (RuneLite
+-Xmx512m + SerialGC via CLIENT_JVM_ARGS, CV debug off on the fleet, lazy item icons)
+it is ~1.0 GB (peak 1.15: RuneLite ~670 MB, bot app ~250 MB) and ~0.25 CPU thread,
+so the PC runs 18 slots; RAM is the limit. Per process: /api/stats/slot/N.
 
 Give the VM enough RAM/CPU first: `fleetctl wslconfig 24 14` (or POST
 `/api/fleet/wslconfig {"memory_gb": 24, "processors": 14}`) writes Windows'
