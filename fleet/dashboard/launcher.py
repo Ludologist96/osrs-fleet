@@ -216,8 +216,10 @@ class Launcher:
                     if st not in ("running", "paused", None):
                         # stopped unexpectedly (bot app restarted by an update, or a crash):
                         # start it again a few times before giving up
-                        if r.get("restarts", 0) < 3:
-                            self._set(n, restarts=r.get("restarts", 0) + 1, resuming=True,
+                        # count only restarts close together (a crash loop), not one per update
+                        restarts = r.get("restarts", 0) if now - r.get("last_restart", 0) < 900 else 0
+                        if restarts < 3:
+                            self._set(n, restarts=restarts + 1, last_restart=now, resuming=True,
                                       msg=f"bot stopped ({st}); restarting it")
                             threading.Thread(target=self._resume, args=(n, r["bot"]), daemon=True).start()
                         else:
