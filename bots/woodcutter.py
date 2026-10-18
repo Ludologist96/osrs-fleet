@@ -4,6 +4,7 @@ from core.bot import Bot
 from core.bank import BankInterface
 
 from core import tools, inventory
+from core.camera import Camera
 from core.region_match import MatchResult
 from core.osrs_client import ToolplaneTab
 from core.control import ScriptControl, ScriptTerminationException
@@ -70,6 +71,16 @@ class BotConfig(BotConfigMixin):
     tree_respawn_wait: RangeParam = RangeParam(1.5, 4.0)
     max_tree_waits: IntParam = IntParam(40)  # stop after this many waits in a row
 
+    # Camera: after a tree is cut, this chance to rotate / zoom the camera a bit
+    camera_chance: FloatParam = FloatParam(0.05)
+    camera_rotate_time: RangeParam = RangeParam(0.3, 1.2)  # seconds holding an arrow key (~3 s = full turn)
+    camera_zoom_chance: FloatParam = FloatParam(0.5)       # chance a fidget also zooms
+    zoom_min: IntParam = IntParam(-4)  # wheel notches out from the starting zoom (limit)
+    zoom_max: IntParam = IntParam(3)   # wheel notches in from the starting zoom (limit)
+    # No marked tree visible: turn the camera to look for one (from the 2nd miss in a row)
+    camera_search: BooleanParam = BooleanParam(True)
+    camera_search_time: RangeParam = RangeParam(0.6, 1.4)
+
     
     
     ###########################################
@@ -103,6 +114,8 @@ class BotExecutor(Bot):
         self.consecutive_failures = 0
         self.tree_index = 0  # Used to cycle through tree tiles
         self.tree_waits = 0  # drop mode: waits in a row with no marked tree
+        self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value)
+        self.chopped_once = False
         
         if not self.cfg.drop_items.value and not self.cfg.bank_to_trees.value:
             self.log.warning("Banking enabled but no route specified. Please set bank_to_trees in the config.")
@@ -149,7 +162,12 @@ class BotExecutor(Bot):
                 if not self.client.is_woodcutting:
                     try:
                         self.log.info("Not woodcutting. Clicking tree...")
+                        # a tree was just cut: sometimes fidget with the camera first
+                        if self.chopped_once and random.random() < self.cfg.camera_chance.value:
+                            self.camera.random_move(self.cfg.camera_rotate_time.value,
+                                                    self.cfg.camera_zoom_chance.value)
                         self.chop_tree()
+                        self.chopped_once = True
                         self.tree_waits = 0
                     except Exception as e:
                         if self.terminate:
@@ -160,12 +178,24 @@ class BotExecutor(Bot):
                             if self.tree_waits > self.cfg.max_tree_waits.value:
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
+                            if self.cfg.camera_search.value and self.tree_waits >= 2:
+                                self.camera.search(self.cfg.camera_search_time.value, self.tree_waits - 1)
                             wait = self.cfg.tree_respawn_wait.choose()
                             self.log.info(f"No marked tree available ({e}); waiting {wait:.1f}s "
                                           f"({self.tree_waits}/{self.cfg.max_tree_waits.value})")
                             time.sleep(wait)
                             self.control.propose_break()
                             continue
+                        if self.cfg.camera_search.value:
+                            # maybe the trees are just out of view: look around once first
+                            self.camera.search(self.cfg.camera_search_time.value, 1)
+                            try:
+                                self.chop_tree()
+                                continue
+                            except ScriptTerminationException:
+                                raise
+                            except Exception:
+                                pass
                         self.log.warning(f"Did we die or something? walking to trees: {e}")
                         self.mover.execute_route(self.cfg.bank_to_trees)
                         self.chop_tree()
