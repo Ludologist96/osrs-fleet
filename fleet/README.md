@@ -179,8 +179,11 @@ average and peak over the last 10 minutes (a slot = all processes of its user
 creates the missing `botN` users, gives each new slot slot 1's RuneLite
 plugins/settings and saved bot settings (not its login), and starts them.
 Slot N still uses screen :N, VNC 5900+N and bot UI 8010+N (slot 12 = 8022).
-Each new account then needs its login once (Jagex Launcher on Windows, then
-"copy login" for that slot, as in step 4).
+Each new account then needs its login once: log it in via the Jagex Launcher on
+Windows (RuneLite), close RuneLite, then press "copy login" on that slot in the
+launcher page (one account at a time - it copies the login Windows saved last).
+Oct 2026, home PC (9800X3D with SMT on, 32 GB, VM 24 GB / 14 threads): 8 woodcutters
+used ~13 GB and ~2.3 threads, so it runs 12 slots; RAM is the limit.
 
 Give the VM enough RAM/CPU first: `fleetctl wslconfig 24 14` (or POST
 `/api/fleet/wslconfig {"memory_gb": 24, "processors": 14}`) writes Windows'

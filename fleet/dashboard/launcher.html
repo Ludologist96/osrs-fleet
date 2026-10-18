@@ -33,6 +33,8 @@
   .acct .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acct .sl { color: var(--muted); font-size: 11px; }
   .acct.off { opacity: .45; cursor: not-allowed; }
+  .acct .cl { padding: 0 6px; font-size: 11px; opacity: 1; }
+  .acct.off:has(.cl) { opacity: 1; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 7px; }
   label.f { display: flex; align-items: center; gap: 6px; }
   select, input[type=number] { font: inherit; padding: 3px 6px; border-radius: 6px;
@@ -125,6 +127,15 @@ async function loadAccounts() {
       <span class="sl">${sl.slot}</span><span class="nm"></span>`;
     el.querySelector('.nm').textContent = name || 'no login';
     if (busy) el.title = 'already launched';
+    if (!name) {   // new account: copy the login that the Jagex Launcher last saved on Windows
+      const b = document.createElement('button'); b.className = 'cl'; b.textContent = 'copy login';
+      b.title = 'First log this account in once via the Jagex Launcher on Windows (RuneLite), close it, then click';
+      b.onclick = async (e) => { e.preventDefault(); b.disabled = true; b.textContent = 'copying…';
+        try { const r = await api(`/api/slot/${sl.slot}/creds`, {}); b.textContent = r.ok ? 'copied - wait ~1 min' : 'failed';
+              if (!r.ok) $('err').textContent = r.error || 'copy failed'; }
+        catch (err) { b.textContent = 'failed'; $('err').textContent = err.message; } };
+      el.appendChild(b);
+    }
     box.appendChild(el);
   }
   const sel = $('bot'); if (!sel.options.length) {
