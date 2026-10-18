@@ -134,8 +134,30 @@ Open **http://localhost:8000/launcher** (or the `OSRS Launcher` shortcut in
 
 Each account must already stand where its bot works (e.g. at marked trees).
 
+**Free roam** (first entry in the bot list) only logs the accounts in on a
+random F2P world, starts no bot and opens their screens, so you can walk them
+to their spots. Run time 0 = 24 h; press Stop when done (they stay logged in).
+
+Every launch logs in on a random normal F2P world (Germany/UK). A bot that
+stops unexpectedly (an update, a crash) is restarted up to 3 times within 15
+minutes. If login fails, the launcher shows the login screen's message (e.g.
+"Failed to login" = the saved login is stale: log that account in once on
+Windows through the Jagex Launcher, then copy its login to the slot again).
+
 **http://localhost:8000/view** shows every logged-in slot's game window in one
 browser page, scaled to fit. Click a screen to control it.
+
+### What every bot does to look human (woodcutter settings, per slot)
+
+- Short breaks: 1% chance per loop (10–30 s), 3-minute cooldown after each;
+  half of them open 1–3 side-panel tabs (skills, quests, equipment...) for
+  2–6 s each, then go back to the inventory.
+- Long breaks: same 1% chance, AFK 10–15 min (the game logs out), at most
+  once per 90 min; the bot logs back in by itself afterwards.
+- Camera: 5% chance after each tree to rotate / zoom / tilt a bit; when no
+  marked tree is visible it turns the camera to look for one.
+- Bots start on the inventory tab. Drop mode drops everything except an axe
+  when all 28 slots are used.
 
 ## 7. Changing the code
 
