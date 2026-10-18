@@ -114,6 +114,62 @@ cmd_copy_settings() {   # from to|all
     done
 }
 
+cmd_slots() {   # N : run N slots (creates users, copies slot 1's RuneLite + bot settings)
+    need_root slots "$@"
+    local want=${1:?number of slots} old=$SLOTS
+    [[ "$want" =~ ^[0-9]+$ ]] && [ "$want" -ge 1 ] && [ "$want" -le 30 ] || { echo "give 1..30" >&2; exit 1; }
+    sed -i "s/^SLOTS=.*/SLOTS=$want/" /etc/osrs/fleet.conf
+    getent group osrs >/dev/null || groupadd osrs
+    for n in $(seq 1 "$want"); do
+        if ! id "bot$n" >/dev/null 2>&1; then
+            useradd -m -s /bin/bash -G osrs "bot$n"
+            echo "created user bot$n"
+        fi
+        # a new slot gets slot 1's RuneLite plugins/settings (not its login) ...
+        if [ "$n" -gt 1 ] && [ ! -d "/home/bot$n/.runelite/profiles2" ] && [ -d /home/bot1/.runelite ]; then
+            install -d -o "bot$n" -g "bot$n" "/home/bot$n/.runelite"
+            rsync -a --exclude 'credentials.properties' --exclude 'cache/' \
+                  --exclude 'logs/' --exclude 'jagexcache/' --exclude 'repository2/' \
+                  /home/bot1/.runelite/ "/home/bot$n/.runelite/"
+            chown -R "bot$n:bot$n" "/home/bot$n/.runelite"
+            echo "slot $n: RuneLite settings copied from slot 1"
+        fi
+        # ... and slot 1's saved bot settings
+        if [ ! -d "$APP_DIR/data/configs/slot$n" ] && [ -d "$APP_DIR/data/configs/slot1" ]; then
+            cp -a "$APP_DIR/data/configs/slot1" "$APP_DIR/data/configs/slot$n"
+            chown -R root:osrs "$APP_DIR/data/configs/slot$n"; chmod -R g+rwX "$APP_DIR/data/configs/slot$n"
+            echo "slot $n: bot settings copied from slot 1"
+        fi
+    done
+    for n in $(seq 1 "$want"); do echo "slot$n: 127.0.0.1:$((5900 + n))"; done > /etc/osrs/vnc-tokens
+    # slots above the new count: stop them (their users and settings stay)
+    for n in $(seq $((want + 1)) "$old"); do
+        systemctl disable --now "osrs-slot@$n.target" >/dev/null 2>&1 || true
+        echo "stopped slot $n"
+    done
+    for n in $(seq 1 "$want"); do
+        systemctl enable "osrs-slot@$n.target" >/dev/null 2>&1
+        systemctl start "osrs-slot@$n.target"
+    done
+    systemctl restart osrs-websockify.service || true
+    systemctl restart osrs-telegram.service || true
+    echo "Now $want slots."
+    systemctl restart osrs-dashboard.service
+}
+
+cmd_wslconfig() {   # MEMORY_GB PROCESSORS : write Windows' .wslconfig (takes effect after the VM restarts)
+    need_root wslconfig "$@"
+    local mem=${1:?memory GB} cpu=${2:?processors}
+    local f
+    f=$(ls /mnt/c/Users/*/.wslconfig 2>/dev/null | head -1 || true)
+    [ -n "$f" ] || { echo "no .wslconfig found under /mnt/c/Users" >&2; exit 1; }
+    cp "$f" "$f.bak"
+    if grep -q '^memory=' "$f"; then sed -i "s/^memory=.*/memory=${mem}GB/" "$f"; else sed -i "/^\[wsl2\]/a memory=${mem}GB" "$f"; fi
+    if grep -q '^processors=' "$f"; then sed -i "s/^processors=.*/processors=${cpu}/" "$f"; else sed -i "/^\[wsl2\]/a processors=${cpu}" "$f"; fi
+    echo "Wrote $f (old one: .wslconfig.bak):"; cat "$f"
+    echo "Restart the VM to use it: double-click fleet\windows\Restart fleet VM.bat (or restart Windows)."
+}
+
 cmd_logs() {   # slot [component]
     local n=${1:?slot number} comp=${2:-app}
     exec journalctl -u "osrs-$comp@$n.service" -n 200 -f
@@ -134,6 +190,8 @@ fleetctl - manage the OSRS fleet ($SLOTS slots)
   fleetctl copy-settings <from> <to|all>
                                         copy RuneLite plugins/settings between slots
   fleetctl logs <N> [part]              follow a slot's log (default part: app)
+  fleetctl slots <N>                    run N slots (new ones get slot 1's settings)
+  fleetctl wslconfig <GB> <threads>     set the VM's RAM/CPU in Windows' .wslconfig
 
 Slot N:  bot web UI http://localhost:801N   VNC localhost:590N   screen :N
 EOF
@@ -146,5 +204,7 @@ case "${1:-help}" in
     creds) shift; cmd_creds "$@" ;;
     copy-settings) shift; cmd_copy_settings "$@" ;;
     logs) shift; cmd_logs "$@" ;;
+    slots) shift; cmd_slots "$@" ;;
+    wslconfig) shift; cmd_wslconfig "$@" ;;
     *) cmd_help ;;
 esac

@@ -173,6 +173,21 @@ Log: `http://localhost:8000/api/journal/osrs-telegram`.
 average and peak over the last 10 minutes (a slot = all processes of its user
 `botN`: screen, VNC, RuneLite, bot app). The launcher's top bar shows the VM total.
 
+### More (or fewer) slots
+
+`fleetctl slots 12` (or POST `/api/fleet/slots {"n": 12}`) runs 12 slots: it
+creates the missing `botN` users, gives each new slot slot 1's RuneLite
+plugins/settings and saved bot settings (not its login), and starts them.
+Slot N still uses screen :N, VNC 5900+N and bot UI 8010+N (slot 12 = 8022).
+Each new account then needs its login once (Jagex Launcher on Windows, then
+"copy login" for that slot, as in step 4).
+
+Give the VM enough RAM/CPU first: `fleetctl wslconfig 24 14` (or POST
+`/api/fleet/wslconfig {"memory_gb": 24, "processors": 14}`) writes Windows'
+`.wslconfig`; then double-click `fleet\windows\Restart fleet VM.bat`.
+Measured Oct 2026: ~1.6 GB RAM and ~0.3-0.5 CPU thread per woodcutting account
+(peaks over 1 thread), plus ~1 thread while the screens page is open.
+
 ### What every bot does to look human (woodcutter settings, per slot)
 
 - Short breaks: 1% chance per loop (10–30 s), 3-minute cooldown after each;

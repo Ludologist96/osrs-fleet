@@ -166,11 +166,12 @@ ACTIONS = {
 }
 
 
-def start_update() -> dict:
-    """Run `fleetctl update` outside this service (it restarts the dashboard at the end)."""
+def start_update(*args: str) -> dict:
+    """Run `fleetctl update` (or another fleetctl command) outside this service - it
+    restarts the dashboard at the end. Its log: /api/update-log/<unit>."""
     unit = f"osrs-update-{int(time.time())}"
     res = subprocess.run(["systemd-run", "--no-block", f"--unit={unit}",
-                          "/opt/osrs/bin/fleetctl", "update"],
+                          "/opt/osrs/bin/fleetctl", *(args or ("update",))],
                          capture_output=True, text=True)
     return {"ok": res.returncode == 0, "unit": unit, "error": res.stderr.strip()}
 
@@ -334,6 +335,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/update":
             # Copy the new code from the Windows folder into the VM and restart the bot apps.
             return self._json(start_update())
+        if self.path == "/api/fleet/slots":
+            # {"n": 12}: run 12 slots (new ones get slot 1's RuneLite + bot settings)
+            n = int(self._body().get("n", 0))
+            if not 1 <= n <= 30:
+                return self._json({"ok": False, "error": "n must be 1..30"}, 400)
+            return self._json(start_update("slots", str(n)))
+        if self.path == "/api/fleet/wslconfig":
+            # {"memory_gb": 24, "processors": 14}: Windows' .wslconfig (used after a VM restart)
+            b = self._body()
+            mem, cpu = int(b.get("memory_gb", 0)), int(b.get("processors", 0))
+            if not (8 <= mem <= 128 and 2 <= cpu <= 64):
+                return self._json({"ok": False, "error": "memory_gb 8..128, processors 2..64"}, 400)
+            res = subprocess.run(["/opt/osrs/bin/fleetctl", "wslconfig", str(mem), str(cpu)],
+                                 capture_output=True, text=True, timeout=30)
+            return self._json({"ok": res.returncode == 0, "out": res.stdout, "error": res.stderr.strip()})
         m = re.fullmatch(r"/api/slot/(\d+)/([a-z-]+)", self.path)
         if not m:
             return self._json({"ok": False, "error": "bad path"}, 404)
