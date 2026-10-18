@@ -109,10 +109,19 @@ class IconStore:
             return cls._instance
 
     def __init__(self):
-        cache_dir = Path(os.environ.get("OSRS_CACHE_DIR") or ICONS_JSON.parent)
-        self.path = cache_dir / "icons.sqlite"
         self._local = threading.local()
-        self._ensure()
+        self.path = None
+        # first usable place wins: $OSRS_CACHE_DIR, next to the JSON, the user's cache dir
+        candidates = [os.environ.get("OSRS_CACHE_DIR"), str(ICONS_JSON.parent),
+                      str(Path.home() / ".cache" / "osrs")]
+        for d in [c for c in candidates if c]:
+            try:
+                self.path = Path(d) / "icons.sqlite"
+                self._ensure()
+                return
+            except Exception as e:
+                get_logger('ItemLookup').warning(f"icon cache not usable in {d}: {e}")
+        self.path = None   # no icons at all rather than a crash
 
     def _ensure(self):
         try:
@@ -145,7 +154,13 @@ class IconStore:
         return con
 
     def raw(self, item_id: int) -> Optional[str]:
-        row = self._con().execute("SELECT b64 FROM icons WHERE id = ?", (item_id,)).fetchone()
+        if self.path is None:
+            return None
+        try:
+            row = self._con().execute("SELECT b64 FROM icons WHERE id = ?", (item_id,)).fetchone()
+        except sqlite3.Error as e:
+            get_logger('ItemLookup').warning(f"icon lookup failed for {item_id}: {e}")
+            return None
         return row[0] if row else None
 
     def cropped(self, item_id: int) -> Optional[str]:
