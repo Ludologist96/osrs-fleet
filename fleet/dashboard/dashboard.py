@@ -238,6 +238,11 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= n <= SLOTS:
                 return self._json({"error": "bad slot"}, 400)
             self._send(200, journal(f"osrs-{comp}@{n}.service", lines).encode(), "text/plain; charset=utf-8")
+        elif m := re.fullmatch(r"/api/journal/(osrs-[a-z@0-9.-]+)", path):
+            # Log + status of any fleet service, e.g. /api/journal/osrs-websockify
+            unit = m.group(1)
+            status = _run(["systemctl", "status", "--no-pager", "-n", "0", unit], timeout=5)
+            self._send(200, (status + "\n\n" + journal(unit, 60)).encode(), "text/plain; charset=utf-8")
         elif m := re.fullmatch(r"/api/update-log/(osrs-update-\d+)", path):
             self._send(200, journal(m.group(1), 200).encode(), "text/plain; charset=utf-8")
         elif m := re.fullmatch(r"/shot/(\d+)\.jpg", path):
