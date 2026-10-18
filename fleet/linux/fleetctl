@@ -170,6 +170,16 @@ cmd_wslconfig() {   # MEMORY_GB PROCESSORS : write Windows' .wslconfig (takes ef
     echo "Restart the VM to use it: double-click fleet\windows\Restart fleet VM.bat (or restart Windows)."
 }
 
+cmd_restart_vm() {   # restart the whole WSL VM from inside it (new .wslconfig takes effect)
+    need_root restart-vm
+    local ps=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+    [ -x "$ps" ] || { echo "Windows PowerShell not reachable (WSL interop off?)" >&2; exit 1; }
+    # A hidden Windows process, independent of this VM: waits, shuts WSL down, starts it again
+    # through the "OSRS Fleet" logon task (the same one Windows runs at login).
+    "$ps" -NoProfile -Command "Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep 5; wsl.exe --shutdown; Start-Sleep 10; Start-ScheduledTask -TaskName \"OSRS Fleet\"'"
+    echo "VM restarts in ~5 s and is back ~20 s later."
+}
+
 cmd_logs() {   # slot [component]
     local n=${1:?slot number} comp=${2:-app}
     exec journalctl -u "osrs-$comp@$n.service" -n 200 -f
@@ -192,6 +202,7 @@ fleetctl - manage the OSRS fleet ($SLOTS slots)
   fleetctl logs <N> [part]              follow a slot's log (default part: app)
   fleetctl slots <N>                    run N slots (new ones get slot 1's settings)
   fleetctl wslconfig <GB> <threads>     set the VM's RAM/CPU in Windows' .wslconfig
+  fleetctl restart-vm                   restart the VM (uses the new .wslconfig)
 
 Slot N:  bot web UI http://localhost:801N   VNC localhost:590N   screen :N
 EOF
@@ -206,5 +217,6 @@ case "${1:-help}" in
     logs) shift; cmd_logs "$@" ;;
     slots) shift; cmd_slots "$@" ;;
     wslconfig) shift; cmd_wslconfig "$@" ;;
+    restart-vm) cmd_restart_vm ;;
     *) cmd_help ;;
 esac

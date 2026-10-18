@@ -341,6 +341,10 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= n <= 30:
                 return self._json({"ok": False, "error": "n must be 1..30"}, 400)
             return self._json(start_update("slots", str(n)))
+        if self.path == "/api/fleet/restart-vm":
+            # restart the whole VM (all slots go down for ~30 s; RuneLite logs out)
+            res = subprocess.run(["/opt/osrs/bin/fleetctl", "restart-vm"], capture_output=True, text=True, timeout=60)
+            return self._json({"ok": res.returncode == 0, "out": res.stdout, "error": res.stderr.strip()})
         if self.path == "/api/fleet/wslconfig":
             # {"memory_gb": 24, "processors": 14}: Windows' .wslconfig (used after a VM restart)
             b = self._body()
