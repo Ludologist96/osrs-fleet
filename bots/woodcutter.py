@@ -1,9 +1,9 @@
 from bots.core import BotConfigMixin
-from bots.core.cfg_types import BooleanParam, StringParam, IntParam, FloatParam, RGBParam, RangeParam, BreakCfgParam, RGBListParam, RouteParam, WaypointParam, ItemParam
+from bots.core.cfg_types import StringListParam, BooleanParam, StringParam, IntParam, FloatParam, RGBParam, RangeParam, BreakCfgParam, RGBListParam, RouteParam, WaypointParam, ItemParam
 from core.bot import Bot
 from core.bank import BankInterface
 
-from core import tools
+from core import tools, inventory
 from core.region_match import MatchResult
 from core.osrs_client import ToolplaneTab
 from core.control import ScriptControl, ScriptTerminationException
@@ -49,6 +49,10 @@ class BotConfig(BotConfigMixin):
     # e.g. "Chop down Oak" for oaks, "Chop down Willow" for willows.
     tree_hover: StringParam = StringParam("Chop down Tree")
     trees_per_color: IntParam = IntParam(4)  # marked trees of one colour to try per round
+    # Drop mode: never drop these (an axe carried in the inventory).
+    keep_items: StringListParam = StringListParam([
+        "Bronze axe", "Iron axe", "Steel axe", "Black axe", "Mithril axe", "Adamant axe", "Rune axe",
+    ])
     # After clicking a tree, wait up to this long (seconds) for chopping to start,
     # e.g. while the character walks there, before clicking anything else.
     chop_start_timeout: FloatParam = FloatParam(10.0)
@@ -262,55 +266,62 @@ class BotExecutor(Bot):
         return False
 
     def check_inventory_full(self):
-        """Check if inventory has the specified number of logs"""
+        """Full = every inventory slot holds something (logs, gems, anything)."""
         try:
-            # Click inventory tab to ensure we can see items
             self.client.click_toolplane(ToolplaneTab.INVENTORY)
-            time.sleep(0.5)
-            
-            # Try to find logs in inventory
+            time.sleep(0.3)
+            sc = self.client.get_screenshot()
+            used = len(inventory.used_slots(sc))
+            self.log.info(f"Inventory: {used}/28 slots used")
+            if self.cfg.drop_items.value:
+                return used >= 28
+            # banking mode keeps the old rule (count of logs)
             logs = self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9)
-            
-            # Count the logs
-            log_count = len(logs)
-            self.log.info(f"Found {log_count} logs in inventory")
-            
-            # Check if we've reached the full inventory threshold
-            return log_count >= self.cfg.inv_full_at.value
-            
+            return len(logs) >= self.cfg.inv_full_at.value or used >= 28
         except Exception as e:
             self.log.warning(f"Error checking inventory: {e}")
             return False
-    
+
     def drop_logs(self):
-        """Drop all logs from inventory"""
+        """Drop everything in the inventory except keep_items (the axe), with shift-click."""
         try:
-            # Make sure inventory tab is open
             self.client.click_toolplane(ToolplaneTab.INVENTORY)
-            time.sleep(0.5)
-            
-            # Find all logs in inventory
-            logs = self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9)
-            
-            if not logs:
-                self.log.warning(f"No {self.cfg.log_type.name} found in inventory to drop")
+            time.sleep(0.4)
+            sc = self.client.get_screenshot()
+            slots = inventory.used_slots(sc)
+            keep = []
+            if self.cfg.keep_items.value:
+                try:
+                    keep = self.client.get_inv_items(list(self.cfg.keep_items.value), min_confidence=0.9)
+                except Exception:
+                    keep = []
+            keep_pts = [k.get_center() for k in keep]
+            to_drop = [r for r in slots if not any(r.contains(*p) for p in keep_pts)]
+            if not to_drop:
+                self.log.warning("Nothing to drop")
                 return
-            
-            self.log.info(f"Dropping {len(logs)} logs")
-            
+            # drop row by row like a player, sometimes going right-to-left
+            rows: dict[int, list] = {}
+            for r in to_drop:
+                rows.setdefault(r.start_y, []).append(r)
+            order = []
+            for i, y in enumerate(sorted(rows)):
+                row = sorted(rows[y], key=lambda r: r.start_x)
+                if i % 2 and random.random() < 0.5:
+                    row.reverse()
+                order += row
+            self.log.info(f"Dropping {len(order)} items (keeping {len(keep)})")
             try:
                 keyboard.press('shift')
-                # Drop each log
-                for log_match in logs:
-                    self.client.click(log_match, rand_move_chance=0, after_click_settle_chance=0)
+                for rect in order:
+                    self.client.click(rect.scale_px(-6), rand_move_chance=0, after_click_settle_chance=0)
                     time.sleep(random.uniform(0.1, 0.3))
             finally:
                 keyboard.release('shift')
-            self.log.info("All logs dropped")
-            
+            self.log.info("Inventory dropped")
         except Exception as e:
-            raise RuntimeError(f"Failed to drop logs: {e}")
-    
+            raise RuntimeError(f"Failed to drop items: {e}")
+
     def bank_logs(self):
         """Bank all logs and prepare for the next woodcutting run"""
         self.log.info("Banking logs...")

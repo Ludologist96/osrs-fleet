@@ -29,3 +29,15 @@ def session_login(only_play_now: bool = False) -> Dict[str, Any]:
         return login.login(only_play_now=only_play_now)
     except Exception as e:
         return {"state": "unknown", "error": f"{type(e).__name__}: {e}"}
+
+
+@router.get("/inventory")
+def session_inventory() -> Dict[str, Any]:
+    """Which inventory slots hold something (for checking the slot detection)."""
+    from core import login, inventory
+    try:
+        sc = login._screenshot(login._window())
+        sd = [round(v, 1) for _, v in inventory.slots(sc)]
+        return {"used": sum(1 for v in sd if v > inventory.ITEM_STDDEV), "stddev": sd}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
