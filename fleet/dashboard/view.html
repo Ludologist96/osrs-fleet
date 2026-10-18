@@ -77,9 +77,9 @@ function connect(n) {
   const url = `ws://${location.host}/ws/slot${n}`;
   const rfb = new RFB(t.inner, url, { shared: true });
   rfb.scaleViewport = true; rfb.resizeSession = false; rfb.focusOnClick = true;
-  rfb.addEventListener('disconnect', () => { t.msg.textContent = 'reconnecting…'; t.msg.hidden = false;
+  rfb.addEventListener('disconnect', () => { t.msg.textContent = 'reconnecting…'; t.msg.style.display = '';
                                               setTimeout(() => connect(n), 3000); });
-  rfb.addEventListener('connect', () => { t.msg.hidden = true; });
+  rfb.addEventListener('connect', () => { t.msg.style.display = 'none'; });
   t.rfb = rfb;
 }
 

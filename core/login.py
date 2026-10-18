@@ -26,8 +26,9 @@ from core.window_manager import WindowManager
 log = get_logger("Login")
 
 # Canvas-relative click targets (x, y) and how far a click may stray from them.
-PLAY_NOW = (383, 258)          # "Play Now" box on the Jagex-account login screen
-CLICK_HERE_TO_PLAY = (383, 323)  # red button on the welcome screen after login
+PLAY_NOW = (383, 258)            # "Play Now" box on the Jagex-account login screen
+OK_BUTTON = (383, 322)           # "Ok" under "You were disconnected from the server."
+CLICK_HERE_TO_PLAY = (386, 336)  # red button on the welcome screen after login
 JITTER = 12
 
 # In-game check: the side panel (inventory etc.) must be visible.
@@ -88,26 +89,58 @@ def _wait_in_game(win, seconds: float) -> bool:
     return False
 
 
-def login(rounds: int = 3, only_play_now: bool = False) -> Dict:
-    """Click "Play Now" then "CLICK HERE TO PLAY" until the game interface shows.
+def is_welcome_screen(sc: Image.Image) -> bool:
+    """The post-login screen: a big dark-red "CLICK HERE TO PLAY" button."""
+    x, y = CLICK_HERE_TO_PLAY
+    box = sc.convert("RGB").crop((x - 50, y - 10, x + 50, y + 10))
+    r, g, b = [sum(c) / len(c) for c in zip(*box.getdata())]
+    return r > 60 and r > 1.8 * g and r > 1.8 * b
+
+
+def _changed(a: Image.Image, b: Image.Image) -> bool:
+    """Did the middle of the login screen change (new dialog, connecting...)?"""
+    box = (230, 200, 540, 360)
+    pa, pb = a.convert("L").crop(box), b.convert("L").crop(box)
+    diff = sum(abs(x - y) for x, y in zip(pa.getdata(), pb.getdata())) / (310 * 160)
+    return diff > 6
+
+
+def login(timeout: float = 120, only_play_now: bool = False) -> Dict:
+    """Get from the login screen into the game, reacting to what is on screen:
+    welcome screen -> CLICK HERE TO PLAY; login screen -> Play Now; a dialog that
+    doesn't react to Play Now (e.g. "You were disconnected") -> Ok.
     Returns the final state(). Does nothing if already in game."""
     win = _window()
     if "-" not in win.title:
         raise RuntimeError("No saved login in this slot (window title has no account name)")
-    for attempt in range(1, rounds + 1):
-        if _wait_in_game(win, 1):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        sc = _screenshot(win)
+        if in_game_confidence(sc) >= IN_GAME_CONFIDENCE:
             break
-        log.info(f"Login attempt {attempt}: clicking Play Now")
+        if is_welcome_screen(sc):
+            log.info("Welcome screen: clicking CLICK HERE TO PLAY")
+            _click_canvas(win, CLICK_HERE_TO_PLAY)
+            _wait_in_game(win, 8)
+            continue
+        log.info("Login screen: clicking Play Now")
         _click_canvas(win, PLAY_NOW)
         if only_play_now:
-            time.sleep(8)
+            time.sleep(5)
             break
-        if _wait_in_game(win, 12):
-            break
-        log.info("Clicking 'CLICK HERE TO PLAY'")
-        _click_canvas(win, CLICK_HERE_TO_PLAY)
-        if _wait_in_game(win, 10):
-            break
+        time.sleep(2.5)
+        if not _changed(sc, _screenshot(win)):
+            log.info("Play Now did nothing: clicking Ok on the dialog")
+            _click_canvas(win, OK_BUTTON)
+            time.sleep(2.5)
+            continue
+        # connecting to the server: wait for the welcome screen or the game
+        wait_until = time.time() + 25
+        while time.time() < wait_until:
+            time.sleep(1.5)
+            sc2 = _screenshot(win)
+            if is_welcome_screen(sc2) or in_game_confidence(sc2) >= IN_GAME_CONFIDENCE:
+                break
     result = state()
     log.info(f"Login finished: {result}")
     return result
