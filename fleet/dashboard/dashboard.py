@@ -260,6 +260,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json(LAUNCHER.status())
         elif path == "/api/bots":
             self._json({"bots": bot_list()})
+        elif m := re.fullmatch(r"/api/slot/(\d+)/world", path):
+            # Which login world slot N's RuneLite is set to (Default World plugin).
+            import glob
+            n = int(m.group(1))
+            out = {}
+            for f in glob.glob(f"/home/bot{n}/.runelite/profiles2/*.properties") + \
+                    glob.glob(f"/home/bot{n}/.runelite/settings.properties"):
+                out[f] = [l for l in Path(f).read_text(errors="replace").splitlines()
+                          if l.startswith(("defaultworld.", "runelite.defaultworldplugin"))]
+            self._json({"files": out, "f2p_worlds": __import__("launcher").f2p_worlds()})
         elif path == "/api/geometry":
             self._json({str(n): window_geometry(n) for n in range(1, SLOTS + 1)})
         elif path == "/api/slots":

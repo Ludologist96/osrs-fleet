@@ -15,8 +15,11 @@ For each slot the launcher:
 
 from __future__ import annotations
 
+import glob
+import html as _html
 import json
 import random
+import re
 import subprocess
 import threading
 import time
@@ -33,6 +36,59 @@ SPREAD_GAP = (60, 240)
 SPREAD_RUNTIME = 0.10
 
 _lock = threading.RLock()
+
+# F2P worlds: normal ones (no activity / skill total / PvP) in these countries.
+WORLD_COUNTRIES = ("Germany", "United Kingdom")
+WORLD_LIST_URL = "https://oldschool.runescape.com/slu"
+# Used when the official world list can't be read (Germany + UK, Oct 2026).
+FALLBACK_F2P_WORLDS = [335, 384, 397, 399, 451, 452, 453, 454, 455, 456,
+                       552, 553, 554, 555, 380, 382, 498, 499]
+_worlds_cache: dict = {"at": 0.0, "worlds": []}
+
+
+def f2p_worlds() -> list[int]:
+    """Normal free-to-play worlds in WORLD_COUNTRIES, from the official list (cached 1 h)."""
+    if time.time() - _worlds_cache["at"] < 3600 and _worlds_cache["worlds"]:
+        return _worlds_cache["worlds"]
+    worlds: list[int] = []
+    try:
+        req = urllib.request.Request(WORLD_LIST_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            page = r.read().decode("utf-8", "replace")
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", page, re.S):
+            m = re.search(r"world=(\d+)", row)
+            cells = [_html.unescape(re.sub(r"<[^>]+>", "", c)).strip()
+                     for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+            if not m or len(cells) < 5:
+                continue
+            location, kind, activity = cells[2], cells[3], cells[4]
+            if kind == "Free" and activity in ("-", "") and location in WORLD_COUNTRIES:
+                worlds.append(int(m.group(1)))
+    except Exception as e:
+        print(f"world list not readable ({e!r}); using the built-in list", flush=True)
+    worlds = worlds or FALLBACK_F2P_WORLDS
+    _worlds_cache.update(at=time.time(), worlds=worlds)
+    return worlds
+
+
+def set_login_world(n: int, world: int) -> int:
+    """Make slot N's RuneLite open on `world` (Default World plugin). RuneLite must be
+    stopped: it writes its settings back when it exits. Returns files changed."""
+    home = f"/home/bot{n}/.runelite"
+    files = glob.glob(f"{home}/profiles2/*.properties") + glob.glob(f"{home}/settings.properties")
+    wanted = {"defaultworld.defaultWorld": str(world), "defaultworld.useLastWorld": "false",
+              "runelite.defaultworldplugin": "true"}
+    for f in files:
+        lines = Path(f).read_text(errors="replace").splitlines()
+        seen = set()
+        for i, line in enumerate(lines):
+            key = line.split("=", 1)[0].strip()
+            if key in wanted:
+                lines[i] = f"{key}={wanted[key]}"
+                seen.add(key)
+        lines += [f"{k}={v}" for k, v in wanted.items() if k not in seen]
+        Path(f).write_text("\n".join(lines) + "\n")
+    return len(files)
 
 
 def _http(method: str, url: str, body: dict | None = None, timeout: float = 10):
@@ -179,7 +235,22 @@ class Launcher:
                     break
                 except Exception:
                     time.sleep(3)
-            # 3. log in
+            # 3. not in game yet: open RuneLite on a random F2P world, then log in
+            st = _http("GET", f"{_app(n)}/api/session/state", timeout=20)
+            if st.get("state") != "game":
+                world = random.choice(f2p_worlds())
+                self._set(n, msg=f"switching to world {world}", world=world)
+                subprocess.run(["systemctl", "stop", f"osrs-client@{n}.service"], capture_output=True)
+                changed = set_login_world(n, world)
+                if not changed:
+                    raise RuntimeError("RuneLite settings not found for this slot")
+                subprocess.run(["systemctl", "start", f"osrs-client@{n}.service"], capture_output=True)
+                time.sleep(5)
+                for _ in range(60):
+                    if self.window_title(n).startswith("RuneLite - "):
+                        break
+                    time.sleep(3)
+                time.sleep(15)  # let the login screen finish loading
             self._set(n, msg="logging in")
             st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
             if st.get("state") != "game":
@@ -194,7 +265,8 @@ class Launcher:
             with _lock:
                 r = self.runs[str(n)]
                 r["stop_at"] = time.time() + (r["stop_at"] - r["start_at"])
-                r.update(status="running", msg=f"{bot} running")
+                where = f" on world {r['world']}" if r.get("world") else ""
+                r.update(status="running", msg=f"{bot} running{where}")
                 self._save()
         except Exception as e:
             self._set(n, status="error", msg=str(e))
