@@ -170,14 +170,12 @@ cmd_wslconfig() {   # MEMORY_GB PROCESSORS : write Windows' .wslconfig (takes ef
     echo "Restart the VM to use it: double-click fleet\windows\Restart fleet VM.bat (or restart Windows)."
 }
 
-cmd_restart_vm() {   # restart the whole WSL VM from inside it (new .wslconfig takes effect)
-    need_root restart-vm
-    local ps=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
-    [ -x "$ps" ] || { echo "Windows PowerShell not reachable (WSL interop off?)" >&2; exit 1; }
-    # A hidden Windows process, independent of this VM: waits, shuts WSL down, starts it again
-    # through the "OSRS Fleet" logon task (the same one Windows runs at login).
-    "$ps" -NoProfile -Command "Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep 5; wsl.exe --shutdown; Start-Sleep 10; Start-ScheduledTask -TaskName \"OSRS Fleet\"'"
-    echo "VM restarts in ~5 s and is back ~20 s later."
+cmd_restart_vm() {
+    # Restarting the VM from inside it doesn't work: a Windows process started from here dies
+    # with the VM, so nothing starts it again (tried 2026-10-18, the VM stayed down).
+    echo "Restart the VM from Windows: double-click fleet\\windows\\Restart fleet VM.bat" >&2
+    echo "(or restart Windows; the 'OSRS Fleet' logon task starts the VM)." >&2
+    exit 1
 }
 
 cmd_logs() {   # slot [component]
