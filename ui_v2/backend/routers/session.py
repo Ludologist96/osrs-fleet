@@ -41,3 +41,13 @@ def session_inventory() -> Dict[str, Any]:
         return {"used": sum(1 for v in sd if v > inventory.ITEM_STDDEV), "stddev": sd}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+@router.get("/screen_text")
+def session_screen_text() -> Dict[str, Any]:
+    """OCR of the message in the middle of the login screen."""
+    from core import login
+    try:
+        return {"text": login.dialog_text(login._screenshot(login._window()))}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}

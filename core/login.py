@@ -97,6 +97,18 @@ def is_welcome_screen(sc: Image.Image) -> bool:
     return r > 60 and r > 1.8 * g and r > 1.8 * b
 
 
+def dialog_text(sc: Image.Image) -> str:
+    """Read the message in the middle of the login screen (e.g. an error), via OCR."""
+    try:
+        from core import ocr
+        box = sc.convert("RGB").crop((200, 190, 570, 340))
+        txt = ocr.execute(box, psm=ocr.TessPsm.SPARSE_TEXT, raise_on_blank=False)
+        return " ".join(txt.split())
+    except Exception:
+        log.debug("login screen OCR failed", exc_info=True)
+        return ""
+
+
 def _changed(a: Image.Image, b: Image.Image) -> bool:
     """Did the middle of the login screen change (new dialog, connecting...)?"""
     box = (230, 200, 540, 360)
@@ -114,6 +126,7 @@ def login(timeout: float = 120, only_play_now: bool = False) -> Dict:
     if "-" not in win.title:
         raise RuntimeError("No saved login in this slot (window title has no account name)")
     deadline = time.time() + timeout
+    last_msg = ""
     while time.time() < deadline:
         sc = _screenshot(win)
         if in_game_confidence(sc) >= IN_GAME_CONFIDENCE:
@@ -129,8 +142,10 @@ def login(timeout: float = 120, only_play_now: bool = False) -> Dict:
             time.sleep(5)
             break
         time.sleep(2.5)
-        if not _changed(sc, _screenshot(win)):
-            log.info("Play Now did nothing: clicking Ok on the dialog")
+        after = _screenshot(win)
+        if not _changed(sc, after):
+            last_msg = dialog_text(after)
+            log.info(f"Play Now did nothing (screen says: '{last_msg}'): clicking Ok on the dialog")
             _click_canvas(win, OK_BUTTON)
             time.sleep(2.5)
             continue
@@ -142,5 +157,7 @@ def login(timeout: float = 120, only_play_now: bool = False) -> Dict:
             if is_welcome_screen(sc2) or in_game_confidence(sc2) >= IN_GAME_CONFIDENCE:
                 break
     result = state()
+    if result["state"] != "game" and last_msg:
+        result["error"] = f"login screen says: {last_msg}"
     log.info(f"Login finished: {result}")
     return result
