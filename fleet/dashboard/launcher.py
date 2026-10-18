@@ -215,6 +215,10 @@ class Launcher:
                     if st not in ("running", "paused", None):
                         self._set(n, status="error", msg=f"bot stopped on its own ({st}); see its log")
 
+    def _cancelled(self, n: int) -> bool:
+        with _lock:
+            return self.runs.get(str(n), {}).get("status") != "starting"
+
     def _start(self, n: int, bot: str):
         try:
             # 1. slot running
@@ -251,11 +255,15 @@ class Launcher:
                         break
                     time.sleep(3)
                 time.sleep(15)  # let the login screen finish loading
+            if self._cancelled(n):
+                return
             self._set(n, msg="logging in")
             st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
             if st.get("state") != "game":
                 raise RuntimeError(f"couldn't get into the game ({st.get('error') or st.get('state')})")
-            # 4. start the bot with this slot's saved settings
+            # 4. start the bot with this slot's saved settings (unless Stop was pressed meanwhile)
+            if self._cancelled(n):
+                return
             self._set(n, msg=f"starting {bot}")
             cfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")
             res = _http("POST", f"{_app(n)}/api/bot/{bot}/start", {"config": cfg}, timeout=60)
@@ -269,7 +277,8 @@ class Launcher:
                 r.update(status="running", msg=f"{bot} running{where}")
                 self._save()
         except Exception as e:
-            self._set(n, status="error", msg=str(e))
+            if not self._cancelled(n):
+                self._set(n, status="error", msg=str(e))
 
     def _bot_status(self, n: int, bot: str):
         try:
