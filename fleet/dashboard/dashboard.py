@@ -336,6 +336,7 @@ class Handler(BaseHTTPRequestHandler):
         if not 1 <= n <= SLOTS:
             return self._json({"ok": False, "error": "bad slot"}, 400)
         if action == "stop-bot":
+            LAUNCHER.stop([n])  # so the launcher doesn't restart it
             return self._json({"ok": stop_bot(n)})
         if action not in ACTIONS:
             return self._json({"ok": False, "error": "unknown action"}, 400)

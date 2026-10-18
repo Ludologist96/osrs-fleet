@@ -119,6 +119,7 @@ class Launcher:
             for r in self.runs.values():
                 if r["status"] == "starting":
                     r["status"] = "waiting"
+                r["resuming"] = False
         except FileNotFoundError:
             self.runs = {}
         except Exception:
@@ -206,14 +207,21 @@ class Launcher:
             if r["status"] == "waiting" and now >= r["start_at"]:
                 self._set(n, status="starting", msg="starting")
                 threading.Thread(target=self._start, args=(n, r["bot"]), daemon=True).start()
-            elif r["status"] == "running":
+            elif r["status"] == "running" and not r.get("resuming"):
                 if now >= r["stop_at"]:
                     self._stop_bot(n, r["bot"])
                     self._set(n, status="done", msg="run time over, bot stopped")
                 else:
                     st = self._bot_status(n, r["bot"])
                     if st not in ("running", "paused", None):
-                        self._set(n, status="error", msg=f"bot stopped on its own ({st}); see its log")
+                        # stopped unexpectedly (bot app restarted by an update, or a crash):
+                        # start it again a few times before giving up
+                        if r.get("restarts", 0) < 3:
+                            self._set(n, restarts=r.get("restarts", 0) + 1, resuming=True,
+                                      msg=f"bot stopped ({st}); restarting it")
+                            threading.Thread(target=self._resume, args=(n, r["bot"]), daemon=True).start()
+                        else:
+                            self._set(n, status="error", msg=f"bot stopped on its own ({st}) 3 times; see its log")
 
     def _cancelled(self, n: int) -> bool:
         with _lock:
@@ -279,6 +287,19 @@ class Launcher:
         except Exception as e:
             if not self._cancelled(n):
                 self._set(n, status="error", msg=str(e))
+
+    def _resume(self, n: int, bot: str):
+        try:
+            st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
+            if st.get("state") != "game":
+                raise RuntimeError(f"couldn't get back into the game ({st.get('error') or st.get('state')})")
+            cfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")
+            res = _http("POST", f"{_app(n)}/api/bot/{bot}/start", {"config": cfg}, timeout=60)
+            if not res.get("success"):
+                raise RuntimeError(f"bot didn't start: {res.get('error')}")
+            self._set(n, msg=f"{bot} running (restarted)", resuming=False)
+        except Exception as e:
+            self._set(n, msg=f"restart failed: {e}", resuming=False)
 
     def _bot_status(self, n: int, bot: str):
         try:
