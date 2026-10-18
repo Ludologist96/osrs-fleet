@@ -264,6 +264,15 @@ class Handler(BaseHTTPRequestHandler):
             # RAM / CPU of the VM and of every slot (averages over ?min=N minutes, default 10)
             mm = re.search(r"(?:^|&)min=([0-9.]+)", query)
             self._json(STATS.snapshot(float(mm.group(1)) if mm else 10))
+        elif m := re.fullmatch(r"/api/stats/slot/(\d+)", path):
+            # every process of slot N with its memory (PSS = its fair share of shared memory)
+            import pwd
+            from stats import slot_processes
+            try:
+                uid = pwd.getpwnam(f"bot{int(m.group(1))}").pw_uid
+            except KeyError:
+                return self._json({"error": "no such slot"}, 404)
+            self._json({"processes": slot_processes(uid)})
         elif path == "/api/bots":
             self._json({"bots": bot_list()})
         elif m := re.fullmatch(r"/api/slot/(\d+)/world", path):

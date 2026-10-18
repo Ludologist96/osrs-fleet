@@ -187,3 +187,23 @@ class Stats:
             "slots": slots,
             "windows": self.windows(),
         }
+
+
+def slot_processes(uid: int) -> list[dict]:
+    """Every process of one slot user with its real memory share (PSS: shared pages split)."""
+    out = []
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            if os.stat(d).st_uid != uid:
+                continue
+            cmd = open(d + "/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace").strip()
+            vals = {}
+            for line in open(d + "/smaps_rollup"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].endswith(":") and parts[1].isdigit():
+                    vals[parts[0][:-1]] = int(parts[1]) * 1024
+            out.append({"pid": int(d[6:]), "cmd": cmd[:160], "rss": vals.get("Rss", 0),
+                        "pss": vals.get("Pss", 0), "swap": vals.get("Swap", 0)})
+        except (OSError, ValueError):
+            continue
+    return sorted(out, key=lambda p: -p["pss"])
