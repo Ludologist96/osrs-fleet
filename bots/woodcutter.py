@@ -49,6 +49,9 @@ class BotConfig(BotConfigMixin):
     # e.g. "Chop down Oak" for oaks, "Chop down Willow" for willows.
     tree_hover: StringParam = StringParam("Chop down Tree")
     trees_per_color: IntParam = IntParam(4)  # marked trees of one colour to try per round
+    # After clicking a tree, wait up to this long (seconds) for chopping to start,
+    # e.g. while the character walks there, before clicking anything else.
+    chop_start_timeout: FloatParam = FloatParam(10.0)
     drop_items: BooleanParam = BooleanParam(False)  # True = drop logs, False = bank logs
     bank_tile: RGBParam = RGBParam(0, 255, 0)  # Green by default, only used when banking
     bank_to_trees: RouteParam = RouteParam([
@@ -210,6 +213,7 @@ class BotExecutor(Bot):
             if clicked:
                 self.tree_index += i + 1
                 time.sleep(self.cfg.chop_click_delay.choose())
+                self._wait_for_chop_start()
                 break
             errors.append(f"{current_tree.to_hex()}: no tree showing '{self.cfg.tree_hover.value}'")
         if not clicked:
@@ -227,6 +231,16 @@ class BotExecutor(Bot):
                 break
             time.sleep(0.2)
     
+    def _wait_for_chop_start(self) -> None:
+        """Don't click another tree while the character is still walking to this one:
+        wait until the Woodcutting overlay says we're chopping (or a timeout)."""
+        deadline = time.time() + float(self.cfg.chop_start_timeout.value)
+        while time.time() < deadline and not self.terminate:
+            if self.client.is_woodcutting:
+                return
+            time.sleep(random.uniform(0.4, 0.8))
+        self.log.debug("Chopping didn't start before the timeout")
+
     def _click_tree_of_color(self, color: RGBParam) -> bool:
         """Click a marked tree of this colour whose mouse-over text matches tree_hover.
         Tries the biggest marked tree first; if it is the wrong kind (e.g. an oak
