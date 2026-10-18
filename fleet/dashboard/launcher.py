@@ -37,6 +37,11 @@ SPREAD_RUNTIME = 0.10
 
 _lock = threading.RLock()
 
+# Pseudo-bot: only log the accounts in (random F2P world) so you can move them
+# by hand in the screen view. No bot runs; "Stop" just ends the entry.
+FREEROAM = "freeroam"
+FREEROAM_DEFAULT_MINUTES = 24 * 60
+
 # F2P worlds: normal ones (no activity / skill total / PvP) in these countries.
 WORLD_COUNTRIES = ("Germany", "United Kingdom")
 WORLD_LIST_URL = "https://oldschool.runescape.com/slu"
@@ -150,6 +155,9 @@ class Launcher:
 
     def launch(self, slots: list[int], bot: str, minutes: float, spread: bool = True) -> dict:
         slots = [n for n in slots if 1 <= n <= self.slots]
+        if bot == FREEROAM:
+            spread = False  # log everyone in right away
+            minutes = minutes or FREEROAM_DEFAULT_MINUTES
         if not slots or minutes <= 0 or not bot:
             raise ValueError("choose at least one slot, a bot and a run time")
         with _lock:
@@ -177,7 +185,7 @@ class Launcher:
                 r = self.runs.get(str(n))
                 if not r or r["status"] in ("done", "error", "stopped"):
                     continue
-                if r["status"] == "running":
+                if r["status"] == "running" and r["bot"] != FREEROAM:
                     self._stop_bot(n, r["bot"])
                 r.update(status="stopped", msg="stopped by you", stop_at=time.time())
             self._save()
@@ -209,8 +217,13 @@ class Launcher:
                 threading.Thread(target=self._start, args=(n, r["bot"]), daemon=True).start()
             elif r["status"] == "running" and not r.get("resuming"):
                 if now >= r["stop_at"]:
+                    if r["bot"] == FREEROAM:
+                        self._set(n, status="done", msg="free roam over")
+                        continue
                     self._stop_bot(n, r["bot"])
                     self._set(n, status="done", msg="run time over, bot stopped")
+                elif r["bot"] == FREEROAM:
+                    continue
                 else:
                     st = self._bot_status(n, r["bot"])
                     if st not in ("running", "paused", None):
@@ -273,6 +286,13 @@ class Launcher:
                 raise RuntimeError(f"couldn't get into the game ({st.get('error') or st.get('state')})")
             # 4. start the bot with this slot's saved settings (unless Stop was pressed meanwhile)
             if self._cancelled(n):
+                return
+            if bot == FREEROAM:
+                with _lock:
+                    r = self.runs[str(n)]
+                    where = f" on world {r['world']}" if r.get("world") else ""
+                    r.update(status="running", msg=f"logged in{where}: free roam, move it by hand")
+                    self._save()
                 return
             self._set(n, msg=f"starting {bot}")
             cfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")

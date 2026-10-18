@@ -34,6 +34,13 @@ class ScriptControl(metaclass=SingletonMeta):
         self._relogin_needed = False
         self._relogging = False
         self._relogin_lock = threading.RLock()
+        # Called once at the start of some short breaks (e.g. look through the
+        # side-panel tabs), with this chance per short break.
+        self.on_short_break = None
+        self.on_short_break_chance: float = 0.0
+        self._break_hook_pending = False
+        self._break_hooking = False
+        self._tls = threading.local()  # lets the hook's own clicks pass the guard
         self.log = get_logger("ScriptControl")
         self._listener: threading.Thread = None
         
@@ -80,6 +87,9 @@ class ScriptControl(metaclass=SingletonMeta):
                     sec
                 )
                 self.log.info(f"Sleeping for {sec} seconds.")
+                import random
+                if self.on_short_break and random.random() < self.on_short_break_chance:
+                    self._break_hook_pending = True
         else:
             self.log.warning("Break proposed but no break configuration set.")
     def _listen_for_control(self):
@@ -163,6 +173,8 @@ class ScriptControl(metaclass=SingletonMeta):
         self.break_until = 0
         self.long_break_end = 0
         self._relogin_needed = False
+        self._break_hook_pending = False
+        self._break_hooking = False
         
         # Ensure listener thread calls are responsive
         self.start_listener()
@@ -195,6 +207,23 @@ class ScriptControl(metaclass=SingletonMeta):
                     self._relogging = False
             self._relogin_needed = False
 
+    def _run_break_hook(self):
+        with self._relogin_lock:
+            if not self._break_hook_pending:
+                return
+            self._break_hooking = True
+            self._break_hook_pending = False
+        self._tls.bypass = True
+        try:
+            self.on_short_break()
+        except ScriptTerminationException:
+            raise
+        except Exception:
+            self.log.warning("Break activity failed", exc_info=True)
+        finally:
+            self._tls.bypass = False
+            self._break_hooking = False
+
     def guard(self, func):
         """
         Decorator to enforce termination and break logic.
@@ -203,9 +232,14 @@ class ScriptControl(metaclass=SingletonMeta):
         """
         @wraps(func)
         def wrapper(*args, **kwargs):
-            while time.time() < self.break_until or self.pause:
+            if getattr(self._tls, "bypass", False):
+                return func(*args, **kwargs)  # inside the break hook
+            while time.time() < self.break_until or self.pause or self._break_hooking:
                 if self.terminate:
                     raise ScriptTerminationException()
+                if self._break_hook_pending and not self.pause:
+                    self._run_break_hook()
+                    continue
                 time.sleep(1)
             if self.terminate:
                 raise ScriptTerminationException()

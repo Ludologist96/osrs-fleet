@@ -40,6 +40,9 @@ class BotConfig(BotConfigMixin):
         RangeParam(10, 30),  # break duration range in seconds
         FloatParam(0.01)     # break chance
     )
+    # Chance a short break is spent looking through the side-panel tabs
+    # (skills, quests, equipment...) before going back to the inventory.
+    break_ui_browse_chance: FloatParam = FloatParam(0.5)
     # Long break: AFK long enough to get logged out (logs back in after),
     # at most once every 90 minutes.
     long_break_cfg: BreakCfgParam = BreakCfgParam(
@@ -114,7 +117,8 @@ class BotExecutor(Bot):
     
     
     def __init__(self, config: BotConfig, user=''):
-        super().__init__(user, break_cfg=config.break_cfg, long_break_cfg=config.long_break_cfg)
+        super().__init__(user, break_cfg=config.break_cfg, long_break_cfg=config.long_break_cfg,
+                         break_ui_browse_chance=config.break_ui_browse_chance.value)
         self.cfg: BotConfig = config
         self.log = get_logger('WoodcutterBot')
         self.consecutive_failures = 0

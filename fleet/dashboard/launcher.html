@@ -73,7 +73,8 @@
       <button class="primary" id="go">Launch</button>
       <button id="all">Select all</button>
       <span class="small">Spread out: each account starts 1–4 min after the previous one, run times vary ±10%.
-        Each account must already be standing where its bot works.</span>
+        Each account must already be standing where its bot works.
+        Free roam: logs the accounts in (no bot, run time ignored if 0) and opens their screens, so you can walk them to their spots.</span>
     </div>
     <div class="err" id="err"></div>
   </section>
@@ -116,6 +117,7 @@ async function loadAccounts() {
     box.appendChild(el);
   }
   const sel = $('bot'); if (!sel.options.length) {
+    const fr = document.createElement('option'); fr.value = 'freeroam'; fr.textContent = 'Free roam (just log in, no bot)'; sel.appendChild(fr);
     for (const x of b.bots) { const o = document.createElement('option'); o.value = x.id; o.textContent = x.name; sel.appendChild(o); }
     sel.value = localStorage.getItem('osrs-bot') || 'woodcutter';
   }
@@ -148,8 +150,11 @@ $('go').onclick = async () => {
   const slots = [...document.querySelectorAll('#accts input:checked')].map(i => +i.value);
   const minutes = (+$('hours').value || 0) * 60 + (+$('mins').value || 0);
   localStorage.setItem('osrs-bot', $('bot').value);
-  try { await api('/api/launch', { slots, bot: $('bot').value, minutes, spread: $('spread').checked });
-        document.querySelectorAll('#accts input').forEach(i => i.checked = false); await refresh(); }
+  const bot = $('bot').value;
+  if (bot === 'freeroam') { localStorage.setItem('osrs-bot', 'woodcutter'); }
+  try { await api('/api/launch', { slots, bot, minutes, spread: $('spread').checked });
+        document.querySelectorAll('#accts input').forEach(i => i.checked = false); await refresh();
+        if (bot === 'freeroam') window.open('/view?slots=' + slots.join(','), 'osrs-view'); }
   catch (e) { $('err').textContent = e.message; }
 };
 $('all').onclick = () => document.querySelectorAll('#accts input:not(:disabled)').forEach(i => i.checked = true);

@@ -10,7 +10,8 @@ from core import cv_debug
 from core import instance
 
 class Bot:
-    def __init__(self, user='', break_cfg: BreakCfgParam = None, long_break_cfg: BreakCfgParam = None):
+    def __init__(self, user='', break_cfg: BreakCfgParam = None, long_break_cfg: BreakCfgParam = None,
+                 break_ui_browse_chance: float = 0.0):
         self.log = get_logger(getattr(self, 'name', 'Bot'))
         self.control = ScriptControl()
         # Clear script control state on start
@@ -27,6 +28,9 @@ class Bot:
         # so log in again before the bot's next action.
         self.control.long_break_config = long_break_cfg
         self.control.after_long_break = self._log_back_in
+        # Some short breaks: look through skills/quests/equipment... tabs, then back.
+        self.control.on_short_break = self._browse_tabs
+        self.control.on_short_break_chance = float(break_ui_browse_chance)
         
         self.api = BotAPI(self.client)
         # Always enable CV debug for bot monitoring
@@ -39,6 +43,9 @@ class Bot:
         self.api._debug_port = debug_port
         
         self.api.start(port=instance.port(5432))
+
+        # Every bot starts on the inventory tab.
+        self._open_inventory()
         
         
     def _log_back_in(self):
@@ -47,6 +54,18 @@ class Bot:
         if result.get("state") != "game":
             raise RuntimeError(f"still not in game: {result}")
         self.log.info("Back in the game")
+        self._open_inventory()
+
+    def _open_inventory(self):
+        from core.osrs_client import ToolplaneTab
+        try:
+            self.client.click_toolplane(ToolplaneTab.INVENTORY)
+        except Exception:
+            self.log.warning("Couldn't open the inventory tab", exc_info=True)
+
+    def _browse_tabs(self):
+        from core import idle
+        idle.browse_tabs(self.client, self.control, self.log)
 
     @property
     def terminate(self) -> bool:
