@@ -119,6 +119,24 @@ you save settings in a slot, it uses the shared ones from `data/configs`.
 keyboard. Stop a bot with **Stop bot** on the dashboard or in that slot's web
 UI.
 
+## 6b. Launcher and all screens in one page
+
+Open **http://localhost:8000/launcher** (or the `OSRS Launcher` shortcut in
+`fleet\windows`, drag it to your desktop):
+
+1. Tick the accounts, pick the bot, set the run time.
+2. **Spread out** starts each account 1–4 minutes after the previous one and
+   varies each run time by ±10%.
+3. **Launch**. For each account the launcher starts the slot if needed, logs
+   in (Play Now → CLICK HERE TO PLAY, also after "You were disconnected"),
+   starts the bot with that slot's saved settings, and stops the bot when its
+   time is up (the character stays logged in).
+
+Each account must already stand where its bot works (e.g. at marked trees).
+
+**http://localhost:8000/view** shows every logged-in slot's game window in one
+browser page, scaled to fit. Click a screen to control it.
+
 ## 7. Changing the code
 
 Keep editing the code in `D:\OSRS\osrs-cv-bot-main` on Windows as usual. The
