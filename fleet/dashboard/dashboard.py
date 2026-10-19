@@ -340,6 +340,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (status + "\n\n" + journal(unit, 60)).encode(), "text/plain; charset=utf-8")
         elif m := re.fullmatch(r"/api/update-log/(osrs-update-\d+)", path):
             self._send(200, journal(m.group(1), 200).encode(), "text/plain; charset=utf-8")
+        elif m := re.fullmatch(r"/shot/(\d+)\.png", path):
+            # full-size, lossless (exact pixel colours, for checking what a bot sees)
+            n = int(m.group(1))
+            try:
+                import mss
+                from PIL import Image
+                with mss.mss(display=f":{n}") as sct:
+                    raw = sct.grab(sct.monitors[0])
+                    img = Image.frombytes("RGB", raw.size, raw.rgb)
+                buf = io.BytesIO()
+                img.save(buf, "PNG")
+                self._send(200, buf.getvalue(), "image/png")
+            except Exception as e:
+                self._send(404, str(e).encode(), "text/plain")
         elif m := re.fullmatch(r"/shot/(\d+)\.jpg", path):
             n = int(m.group(1))
             wm = re.search(r"(?:^|&)w=(\d+)", query)

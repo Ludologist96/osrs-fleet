@@ -101,6 +101,16 @@ BAR_SEARCH = (0, 0, 330, 170)  # window-relative area where the overlay sits (to
 LOOT_MIN_SIZE = 14   # px: a tile outline is bigger than this both ways (item names are flatter)
 
 
+def hue_mask(img: Image.Image, rgb, hue_tol: int = 10, min_sat: int = 110, min_val: int = 80) -> np.ndarray:
+    """Pixels with about the same hue as `rgb` (OpenCV hue 0-179), strongly coloured.
+    Tolerates RuneLite drawing outlines semi-transparent over grass, unlike an RGB match."""
+    hsv = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2HSV)
+    target = cv2.cvtColor(np.uint8([[list(rgb)]]), cv2.COLOR_RGB2HSV)[0, 0, 0]
+    dh = np.abs(hsv[:, :, 0].astype(np.int16) - int(target))
+    dh = np.minimum(dh, 180 - dh)
+    return (dh <= hue_tol) & (hsv[:, :, 1] >= min_sat) & (hsv[:, :, 2] >= min_val)
+
+
 class BotExecutor(Bot):
     name: str = "Slayer Bot"
     description: str = "Attacks highlighted monsters one after another (cows first)"
@@ -284,8 +294,7 @@ class BotExecutor(Bot):
     def find_loot(self) -> list[MatchResult]:
         """Highlighted ground-item tiles near the character, nearest first."""
         sc = self.client.get_filtered_screenshot()
-        arr = np.asarray(sc.convert("RGB"), dtype=np.int16)
-        mask = np.all(np.abs(arr - np.array(self.cfg.loot_color.value)) <= self.cfg.color_tolerance.value, axis=2)
+        mask = hue_mask(sc, self.cfg.loot_color.value)
         mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
         num, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         px, py = self._player_point()
@@ -300,6 +309,8 @@ class BotExecutor(Bot):
                 continue
             found.append((d, MatchResult(int(x), int(y), int(x + w), int(y + h))))
         found.sort(key=lambda t: t[0])
+        self.log.debug(f"Loot tiles: {num - 1} purple blobs, {len(found)} near enough "
+                       f"(player at {px},{py}): {[(round(d), m.bounding_box) for d, m in found[:4]]}")
         return [m for _, m in found]
 
     def _wanted_loot(self) -> list[str]:
