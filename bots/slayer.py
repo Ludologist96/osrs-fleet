@@ -63,8 +63,10 @@ class BotConfig(BotConfigMixin):
     after_kill_delay: RangeParam = RangeParam(0.4, 2.2)
 
     # --- health (no food yet): below min_hp don't start a fight, rest until resume_hp ---
-    min_hp: IntParam = IntParam(5)
-    resume_hp: IntParam = IntParam(9)
+    # In % of max HP, read from the colour of the HP number on the minimap orb
+    # (the game colours it green at full health, yellow at half, red when low).
+    min_hp: IntParam = IntParam(50)
+    resume_hp: IntParam = IntParam(90)
     rest_check: RangeParam = RangeParam(20, 40)  # seconds between HP checks while resting
 
     # --- loot (RuneLite Ground Items highlights these; the launcher sets it) ---
@@ -155,6 +157,7 @@ class BotExecutor(Bot):
                     if self._step() == "stop":
                         return
                     self.failures = 0
+                    continue
                 except ScriptTerminationException:
                     raise
                 except Exception as e:
@@ -177,8 +180,10 @@ class BotExecutor(Bot):
         if state == "fighting":
             self._wait_fight_end()
             return
-        # not fighting (no bar, or the last target's bar is empty)
+        # not fighting (no bar, or the last target's bar is empty): the moment for a break
+        self.control.propose_break()
         hp = self._hp()
+        self.log.debug(f"HP {hp}%")
         if hp is not None and hp < self.cfg.min_hp.value:
             return self._rest(hp)
         if self.kills and random.random() < self.cfg.camera_chance.value:
@@ -198,11 +203,27 @@ class BotExecutor(Bot):
 
     # ------------------------------------------------------------------ health
     def _hp(self) -> int | None:
-        """Hitpoints from the minimap orb (None if it can't be read)."""
+        """HP in % of max, from the colour of the number next to the minimap HP orb:
+        the game draws it pure green at 100%, yellow at 50%, red near 0%.
+        (Tesseract can't read those tiny 7 px digits reliably.)"""
         try:
             sc = self.client.get_screenshot()
-            v = self.client.minimap.get_minimap_stat(self.client.minimap.health, sc)
-            return int(v) if v else None
+            h = self.client.minimap.health
+            x1, y1 = max(0, h.start_x - 34), max(0, h.start_y - 4)
+            x2, y2 = h.end_x + 4, h.end_y + 12
+            arr = np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2)), dtype=np.int16)
+            r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+            # text pixels: fully saturated, one of red/green at max, no blue
+            txt = (np.maximum(r, g) >= 245) & (b <= 30) & (np.minimum(r, g) <= 250)
+            if txt.sum() < 6:
+                self.log.debug(f"HP number not found near the orb ({x1},{y1})-({x2},{y2})")
+                return None
+            rm, gm = float(r[txt].mean()), float(g[txt].mean())
+            if gm >= rm:   # green .. yellow: 100% .. 50%
+                pct = 100 - 50 * rm / 255
+            else:          # yellow .. red: 50% .. 0%
+                pct = 50 * gm / 255
+            return int(round(pct))
         except Exception as e:
             self.log.debug(f"Couldn't read HP: {e}")
             return None
@@ -210,14 +231,14 @@ class BotExecutor(Bot):
     def _rest(self, hp: int):
         """Too hurt to fight and nothing to eat: stand still until HP comes back
         (about 1 HP a minute). Breaks still happen meanwhile."""
-        self.log.warning(f"HP {hp} < {self.cfg.min_hp.value}: resting until {self.cfg.resume_hp.value}")
+        self.log.warning(f"HP {hp}% < {self.cfg.min_hp.value}%: resting until {self.cfg.resume_hp.value}%")
         start = time.time()
         while not self.terminate and time.time() - start < 40 * 60:
             time.sleep(self.cfg.rest_check.choose())
             self.control.propose_break()
             hp = self._hp()
             if hp is not None and hp >= self.cfg.resume_hp.value:
-                self.log.info(f"HP {hp}: back to fighting")
+                self.log.info(f"HP {hp}%: back to fighting")
                 return
         if not self.terminate:
             self.log.error("HP didn't come back after 40 min. Stopping.")
@@ -370,6 +391,7 @@ class BotExecutor(Bot):
         return 28 - len(inventory.used_slots(self.client.get_screenshot()))
 
     def pick_up_loot(self):
+        last = None  # tile of the last pick-up: the rest of the pile is under the character
         for _ in range(self.cfg.max_loot_per_kill.value):
             if self.terminate:
                 return
@@ -377,11 +399,16 @@ class BotExecutor(Bot):
             if not names:
                 return
             tiles = self.find_loot()
+            if not tiles and last is not None:
+                # the character stands on the pile now and hides its outline: try the same spot
+                tiles, last = [last], None
             if not tiles:
                 return
             before = self._free_slots()
-            if not any(self._take(t, names) for t in tiles[:3]):
+            taken = next((t for t in tiles[:3] if self._take(t, names)), None)
+            if taken is None:
                 return
+            last = taken
             # wait until it lands in the inventory (walk there + pick up)
             deadline = time.time() + float(self.cfg.pickup_timeout.value)
             while time.time() < deadline and not self.terminate:
