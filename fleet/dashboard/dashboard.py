@@ -392,6 +392,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "slots like 1-5 or 1,2,3"}, 400)
             args = ["proxy", "import"] + ([spec] if spec else []) + (["--forget"] if b.get("forget") else [])
             return self._json(start_update(*args))
+        if m := re.fullmatch(r"/api/slot/(\d+)/fit-window", self.path):
+            from launcher import fit_window
+            return self._json({"ok": True, "moved": fit_window(int(m.group(1)))})
+        if m := re.fullmatch(r"/api/slot/(\d+)/rlset", self.path):
+            # {"settings": {"npcindicators.npcToHighlight": "Cow"}}: write RuneLite settings
+            # of slot N (stops its RuneLite, writes, starts it again - it logs out).
+            from launcher import set_rl_settings
+            n = int(m.group(1))
+            want = self._body().get("settings") or {}
+            if not 1 <= n <= SLOTS or not want or not all(
+                    re.fullmatch(r"[A-Za-z0-9_.]+", str(k)) and "\n" not in str(v) for k, v in want.items()):
+                return self._json({"ok": False, "error": "settings: {key: value}"}, 400)
+            subprocess.run(["systemctl", "stop", f"osrs-client@{n}.service"], capture_output=True, timeout=60)
+            try:
+                changed = set_rl_settings(n, {str(k): str(v) for k, v in want.items()}, all_profiles=False)
+            finally:
+                subprocess.run(["systemctl", "start", "--no-block", f"osrs-client@{n}.service"], capture_output=True)
+            return self._json({"ok": changed > 0, "files": changed})
         if self.path == "/api/fleet/restart-vm":
             # restart the whole VM (all slots go down for ~30 s; RuneLite logs out)
             res = subprocess.run(["/opt/osrs/bin/fleetctl", "restart-vm"], capture_output=True, text=True, timeout=60)

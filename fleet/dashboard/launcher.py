@@ -16,6 +16,7 @@ For each slot the launcher:
 from __future__ import annotations
 
 import glob
+import os
 import html as _html
 import json
 import random
@@ -79,10 +80,44 @@ def f2p_worlds() -> list[int]:
 def set_login_world(n: int, world: int) -> int:
     """Make slot N's RuneLite open on `world` (Default World plugin). RuneLite must be
     stopped: it writes its settings back when it exits. Returns files changed."""
+    return set_rl_settings(n, {"defaultworld.defaultWorld": str(world), "defaultworld.useLastWorld": "false",
+                               "runelite.defaultworldplugin": "true"})
+
+
+SCREEN_W, SCREEN_H = 1280, 800
+
+
+def fit_window(n: int) -> bool:
+    """Move slot N's RuneLite window back onto its screen if part of it is off-screen
+    (bots click inside the window; a window hanging off the edge gets misclicks).
+    Returns True when it was moved."""
+    env = dict(os.environ, DISPLAY=f":{n}")
+    try:
+        wid = subprocess.run(["xdotool", "search", "--name", "^RuneLite"], capture_output=True,
+                             text=True, env=env, timeout=5).stdout.split()[0]
+        out = subprocess.run(["xdotool", "getwindowgeometry", "--shell", wid], capture_output=True,
+                             text=True, env=env, timeout=5).stdout
+    except (IndexError, subprocess.SubprocessError):
+        return False
+    g = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+    try:
+        x, y, w, h = (int(g[k]) for k in ("X", "Y", "WIDTH", "HEIGHT"))
+    except (KeyError, ValueError):
+        return False
+    if x >= 0 and y >= 0 and x + w <= SCREEN_W and y + h <= SCREEN_H:
+        return False
+    nx, ny = max(0, (SCREEN_W - w) // 2), max(0, (SCREEN_H - h) // 2)
+    subprocess.run(["xdotool", "windowmove", wid, str(nx), str(ny)], env=env, capture_output=True, timeout=5)
+    return True
+
+
+def set_rl_settings(n: int, wanted: dict, all_profiles: bool = True) -> int:
+    """Write RuneLite settings (key=value) into slot N's profile files. RuneLite must be
+    stopped. all_profiles=False skips the per-account $rsprofile files. Returns files changed."""
     home = f"/home/bot{n}/.runelite"
     files = glob.glob(f"{home}/profiles2/*.properties") + glob.glob(f"{home}/settings.properties")
-    wanted = {"defaultworld.defaultWorld": str(world), "defaultworld.useLastWorld": "false",
-              "runelite.defaultworldplugin": "true"}
+    if not all_profiles:
+        files = [f for f in files if "$rsprofile" not in os.path.basename(f)]
     for f in files:
         lines = Path(f).read_text(errors="replace").splitlines()
         seen = set()
@@ -287,6 +322,8 @@ class Launcher:
             # 4. start the bot with this slot's saved settings (unless Stop was pressed meanwhile)
             if self._cancelled(n):
                 return
+            if fit_window(n):
+                self._set(n, msg="RuneLite window was partly off-screen: moved it back")
             if bot == FREEROAM:
                 with _lock:
                     r = self.runs[str(n)]
