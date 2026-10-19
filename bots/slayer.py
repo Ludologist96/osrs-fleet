@@ -331,6 +331,7 @@ class BotExecutor(Bot):
 
     def attack(self) -> bool:
         """Click a highlighted monster showing the attack text, then wait for the fight."""
+        self._close_menu()
         targets = self.find_targets()
         if not targets:
             self.log.debug("No highlighted monster on screen")
@@ -552,11 +553,30 @@ class BotExecutor(Bot):
         self._close_menu()
         return False
 
+    def _menu_open(self) -> MatchResult | None:
+        try:
+            return self.client.get_right_click_menu(self.client.get_screenshot())
+        except Exception:
+            return None
+
     def _close_menu(self):
-        """The game closes the right-click menu when the mouse moves away from it."""
-        x, y = self.client.mouse_position()
-        self.client.move_to((max(10, x + random.choice((-1, 1)) * random.randint(140, 200)),
-                             max(10, y + random.randint(-40, 40))), rand_move_chance=0)
+        """The game closes the right-click menu when the mouse leaves it. A menu left open
+        swallows the next click (seen: the next attack click only closed the menu)."""
+        for attempt in range(3):
+            menu = self._menu_open()
+            if menu is None:
+                return
+            # go clearly outside the menu box: left or right of it, at its height
+            gap = random.randint(25, 60) + 30 * attempt
+            if random.random() < 0.5 and menu.start_x - gap > 15:
+                x = menu.start_x - gap
+            else:
+                x = menu.end_x + gap
+            y = random.randint(menu.start_y, max(menu.start_y + 1, menu.end_y))
+            self.client.move_to((x, y), rand_move_chance=0)
+            time.sleep(random.uniform(0.15, 0.3))
+        if self._menu_open() is not None:
+            self.log.warning("Right-click menu didn't close")
 
     def _take(self, tile: MatchResult, names: list[str]) -> bool:
         """Left-click the tile if its top action is "Take <wanted item>"; otherwise (another
