@@ -62,7 +62,7 @@ class BotConfig(BotConfigMixin):
 
     # --- fighting ---
     # After clicking a monster, wait up to this long for the fight to start (walking there).
-    attack_start_timeout: FloatParam = FloatParam(8.0)
+    attack_start_timeout: FloatParam = FloatParam(5.0)
     fight_check_delay: RangeParam = RangeParam(0.6, 1.3)
     max_fight_time: FloatParam = FloatParam(90.0)  # give up on one fight after this long
     # Pause after a kill before looking for the next monster (reaction time).
@@ -78,13 +78,14 @@ class BotConfig(BotConfigMixin):
     # --- loot (RuneLite Ground Items highlights these; the launcher sets it) ---
     loot: BooleanParam = BooleanParam(True)
     loot_use: StringListParam = StringListParam(["Bones"])     # pick up and use at once (bury / eat)
-    loot_keep: StringListParam = StringListParam(["Cowhide"])  # pick up and keep
+    loot_keep: StringListParam = StringListParam([])  # pick up and keep (e.g. "Cowhide" once banking exists)
     loot_color: RGBParam = RGBParam(170, 0, 255)  # Ground Items highlight colour (purple)
     loot_wait: RangeParam = RangeParam(2.4, 3.4)   # after a kill: death animation, then the drop appears
     loot_max_distance: IntParam = IntParam(170)    # px from the character: ignore loot further away
     max_loot_per_kill: IntParam = IntParam(4)      # pick-ups to try after one kill
     pickup_timeout: FloatParam = FloatParam(8.0)   # walk there + pick up
     use_delay: RangeParam = RangeParam(1.1, 1.7)   # between burying bones (one per ~1.2 s)
+    use_check_every: IntParam = IntParam(3)  # every N kills also look for `loot_use` items left in the inventory
     loot_zoom_notches: IntParam = IntParam(2)      # item not found: zoom in this much, try again, zoom back
 
     # --- nothing to attack ---
@@ -312,6 +313,8 @@ class BotExecutor(Bot):
                     before = self._loot_mask()
                     time.sleep(self.cfg.loot_wait.choose())
                     self.pick_up_loot(before)
+                    self.use_items()
+                elif self.cfg.loot_use.value and self.kills % max(1, self.cfg.use_check_every.value) == 0:
                     self.use_items()
                 time.sleep(self.cfg.after_kill_delay.choose())
                 return
@@ -730,31 +733,32 @@ class BotExecutor(Bot):
         return False
 
     def use_items(self):
-        """Left-click every `loot_use` item in the inventory (bury bones, eat food...)."""
+        """Left-click every `loot_use` item in the inventory (bury bones, eat food...).
+        Also catches ones left from earlier (a misread mouse-over, a break in between)."""
         names = list(self.cfg.loot_use.value)
         if not names:
             return
+        wanted = [f"* {n}" for n in names]  # the left-click action is the use; check the name
+        used, skipped = 0, 0
         for _ in range(28):
             if self.terminate:
-                return
+                break
             try:
-                items = self.client.get_inv_items(names, min_confidence=0.9)
+                items = self.client.get_inv_items(names, min_confidence=0.85)
             except Exception as e:
                 self.log.debug(f"Inventory check failed: {e}")
-                return
-            if not items:
-                self.log.debug(f"No {names} in the inventory")
-                return
-            m = items[0]
-            # mouse-over of an inventory item: "Bury Bones", "Eat Trout"... The item's
-            # left-click action is what we want, so only the item name has to match
-            # (OCR often garbles the verb: "84Xy Bones").
-            wanted = [f"* {n}" for n in names]
+                break
+            if len(items) <= skipped:
+                break
+            m = items[skipped]
             if not self.hover_click(m.scale_px(-6), wanted, tries=3):
-                self.log.debug("Inventory item's mouse-over didn't match; not using it")
-                return
-            self.log.info("Used an item")
+                self.log.debug("Inventory item's mouse-over didn't match; trying the next one")
+                skipped += 1
+                continue
+            used += 1
             time.sleep(self.cfg.use_delay.choose())
+        if used:
+            self.log.info(f"Used {used} item(s) ({', '.join(names)})")
 
     def _wait_fight_start(self) -> bool:
         deadline = time.time() + float(self.cfg.attack_start_timeout.value)
