@@ -37,6 +37,7 @@ These are not negotiable. The framework will not protect you if you break them; 
 | R8 | **Every bot must declare `name`, `description`, `tier`, `instructions`** as class attributes on `BotExecutor`. | UI discovery uses them. |
 | R9 | **`BotConfig` fields must have type annotations.** `field: ItemParam = ItemParam("X")` — the `: ItemParam` part is what the UI reads. | No annotation, no form field, invisible parameter. |
 | R10 | **Wrap `start()` body in `try / except ScriptTerminationException`** so PageUp produces a clean log line, not a traceback. | UX. |
+| R11 | **Every click and mouse move must be humanlike: go through `client.click` / `client.smart_click_*` / `client.move_to` (or `core.input.mouse_control.click` / `press` / `move_to`). Never `pyautogui.click()`/`rightClick()`** (it presses and releases in the same instant). Aim with `match.get_point_within()` (normal distribution around the middle), not fixed points or `get_center()` without jitter. | The game records mouse input. The framework gives curved paths, overshoot, varied speed, a 35-250 ms button hold and centre-weighted aim; raw calls skip all of it. |
 
 ---
 

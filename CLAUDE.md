@@ -22,6 +22,7 @@ When opening a fresh bot-building conversation, the prompt at [.claude/prompts/n
 8. `BotExecutor` must declare `name`, `description`, `tier`, `instructions` class attrs (read by the UI).
 9. Every `BotConfig` field needs a type annotation — that's what the UI discovers.
 10. Wrap `start()` in `try / except ScriptTerminationException` for a clean exit log.
+11. All clicks/moves humanlike: only via `client.click` / `smart_click_*` / `move_to` (or `mouse_control.press`), never raw `pyautogui.click()`; aim with `get_point_within()`.
 
 The long form, with rationale and examples, lives in [bot-building.md](.claude/instructions/bot-building.md).
 

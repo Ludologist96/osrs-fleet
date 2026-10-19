@@ -524,9 +524,9 @@ class MasteringMixology():
                         click_cnt = 2 if order.action == Action.AGITATOR else 1
 
                         for _ in range(click_cnt):
-                            # using pyautogui to go as fast as possible
-                            duration = random.uniform(0.03, 0.1)
-                            pyautogui.click(duration=duration)
+                            # fast, but still a human button press (not a 0 ms click)
+                            from core.input.mouse_control import press
+                            press()
                             time.sleep(random.uniform(0.3, 0.6))
                         time.sleep(1)
 

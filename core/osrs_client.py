@@ -1161,9 +1161,10 @@ class RuneLiteClient(GenericWindow):
         for _ in range(retry_hover):
             if center_point:
                 point = match.get_center()
-                point = (
-                    point[0] + random.randint(-center_point_variance, center_point_variance),
-                    point[1] + random.randint(-center_point_variance, center_point_variance)
+                v = max(1, center_point_variance)
+                point = (  # aim near the centre, normally distributed (not a fixed box)
+                    point[0] + max(-3 * v, min(3 * v, round(random.gauss(0, v)))),
+                    point[1] + max(-3 * v, min(3 * v, round(random.gauss(0, v))))
                 )
             else:  
                 point = match.get_point_within()

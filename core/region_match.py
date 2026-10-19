@@ -35,11 +35,18 @@ class RegionMixin(ABC):
 
     # ---- helpers reused by *all* regions ----------------------------
     def get_point_within(self) -> Tuple[int, int]:
-        """Uniform random integer pixel strictly inside region."""
+        """Random pixel inside the region, like a person aims: most clicks near the
+        middle, fewer towards the edges (normal distribution), never outside."""
         sx, sy, ex, ey = self.bounding_box
         if ex <= sx or ey <= sy:            # degenerate → top‑left
             return sx, sy
-        while True:                         # rejection sample
+        cx, cy = (sx + ex - 1) / 2, (sy + ey - 1) / 2
+        sdx, sdy = max(0.5, (ex - sx) / 5), max(0.5, (ey - sy) / 5)
+        for _ in range(30):
+            x, y = round(random.gauss(cx, sdx)), round(random.gauss(cy, sdy))
+            if sx <= x < ex and sy <= y < ey and self.contains(x, y):
+                return x, y
+        while True:                         # fallback: uniform rejection sample
             x, y = random.randint(sx, ex-1), random.randint(sy, ey-1)
             if self.contains(x, y):
                 return x, y

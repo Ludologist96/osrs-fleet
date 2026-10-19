@@ -251,6 +251,25 @@ def _constrain_travel(p1: Tuple[float, float],
 
 # ── click helpers (unchanged API) ──────────────────────────
 @control.guard
+def hold_time() -> float:
+    """How long a person keeps a mouse button down for a click: mostly 60-130 ms,
+    sometimes quicker or slower (log-normal), never a 0 ms machine click."""
+    return min(0.25, max(0.035, random.lognormvariate(math.log(0.085), 0.3)))
+
+
+def press(click_type: "ClickType" = None) -> None:
+    """One click at the current cursor position with a human hold time.
+    (pyautogui.click() presses and releases in the same instant.)"""
+    click_type = click_type or ClickType.LEFT
+    button = {ClickType.LEFT: "left", ClickType.RIGHT: "right",
+              ClickType.MIDDLE: "middle"}.get(click_type, "left")
+    pyautogui.mouseDown(button=button, _pause=False)
+    try:
+        time.sleep(hold_time())
+    finally:
+        pyautogui.mouseUp(button=button, _pause=False)
+
+
 def click(
         x=-1, y=-1, 
         click_type=ClickType.LEFT,
@@ -259,14 +278,8 @@ def click(
     verify_tolerance: int = 3,
     verify_corrections: int = 2):
     def _do_click():
-        time.sleep(random.uniform(.05, .15))
-        duration = random.uniform(.05, .25)
-        if click_type == ClickType.LEFT:
-            pyautogui.click(duration=duration)
-        elif click_type == ClickType.RIGHT:
-            pyautogui.rightClick(duration=duration)
-        elif click_type == ClickType.MIDDLE:
-            pyautogui.middleClick(duration=duration)
+        time.sleep(random.uniform(.05, .15))  # settle before pressing
+        press(click_type)
 
     _block(True)
     try:
@@ -342,6 +355,9 @@ def move_to(
     dist0  = _euclidean((sx, sy), (tx, ty))
     if dist0 < 1:
         return
+
+    # one speed for this whole move (some moves quick, some lazy)
+    move_speed_factor = min(1.6, max(0.7, random.lognormvariate(0, 0.18)))
 
     # ── pick way-points  ───────────────
     
@@ -515,8 +531,8 @@ def move_to(
             # Ensure minimum duration for very short movements
             base_dur = max(min_duration, base_dur)
             
-            # Add slight randomness but keep it consistent
-            base_dur *= random.uniform(0.97, 1.03)  # Reduced variation range
+            # People don't move at one speed: each move a bit faster or slower
+            base_dur *= move_speed_factor
             
             # run
             _execute_step(prev, base_dur)
