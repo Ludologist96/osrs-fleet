@@ -51,6 +51,7 @@ cmd_update() {
         --exclude '.git/' --exclude '.venv/' --exclude '__pycache__/' \
         --exclude 'node_modules/' --exclude '*.log' \
         --exclude 'data/configs/slot*/' \
+        --include '/requirements.txt' --exclude '/*.txt' --exclude '/*.csv' --exclude '/fleet/*.txt' --exclude '/fleet/*.csv' \
         "$src/" "$APP_DIR/"
     chown -R root:osrs "$APP_DIR"; chmod -R g+rwX "$APP_DIR"
     install -d -m 2775 -o root -g osrs /var/lib/osrs/cache   # shared item icon cache
@@ -103,6 +104,50 @@ cmd_creds() {   # slot [file]
     install -m 600 -o "bot$n" -g "bot$n" "$file" "/home/bot$n/.runelite/credentials.properties"
     echo "Copied $file -> slot $n. Restarting its RuneLite."
     systemctl restart "osrs-client@$n.service"
+}
+
+cmd_forget() {   # slot : log out for good and wipe what ties this slot to old accounts
+    need_root forget "$@"
+    local n=${1:?slot number} h="/home/bot${1}"
+    systemctl stop "osrs-client@$n.service"
+    # Jagex login, the game's machine id (random.dat) and the game cache; RuneLite settings stay.
+    rm -rf "$h/.runelite/credentials.properties" "$h/random.dat" "$h/jagexcache" \
+           "$h/.runelite/jagexcache" "$h/.runelite/random.dat"
+    echo "Slot $n: login and game id removed. Starting RuneLite again (no login)."
+    systemctl start "osrs-client@$n.service"
+}
+
+install_firefox() {
+    command -v firefox >/dev/null && ! [ -L "$(command -v firefox)" -a "$(readlink -f "$(command -v firefox)")" = /usr/bin/snap ] && return 0
+    echo "Installing Firefox (from Mozilla, not the snap) ..."
+    export DEBIAN_FRONTEND=noninteractive
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/packages.mozilla.org.asc
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+        > /etc/apt/sources.list.d/mozilla.list
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+    apt-get update -qq && apt-get install -y -qq firefox >/dev/null
+}
+
+cmd_browser() {   # slot [url] : Firefox on slot N's screen, as botN = through slot N's proxy
+    need_root browser "$@"
+    local n=${1:?slot number} url=${2:-https://ipinfo.io}
+    if [ ! -e "/etc/osrs/proxy/slot$n.on" ]; then
+        echo "Slot $n has no proxy - not opening a browser there (it would use the home IP)." >&2; exit 1
+    fi
+    install_firefox
+    systemctl stop "osrs-browser-$n.service" 2>/dev/null || true
+    systemctl reset-failed "osrs-browser-$n.service" 2>/dev/null || true
+    systemd-run --unit="osrs-browser-$n" --uid="bot$n" --gid="bot$n" \
+        --setenv=DISPLAY=":$n" --setenv=MALLOC_ARENA_MAX=2 \
+        /bin/sh -c 'mkdir -p "$HOME/.osrs-firefox" && exec /usr/bin/firefox --no-remote --profile "$HOME/.osrs-firefox" "$0"' "$url" >/dev/null
+    echo "Browser open on slot $n's screen."
+}
+
+cmd_browser_close() {   # slot
+    need_root browser-close "$@"
+    systemctl stop "osrs-browser-${1:?slot number}.service" 2>/dev/null || true
+    echo "Browser closed."
 }
 
 cmd_copy_settings() {   # from to|all
@@ -203,6 +248,8 @@ fleetctl - manage the OSRS fleet ($SLOTS slots)
   fleetctl update                       copy new code from Windows and restart bot apps,
                                         dashboard and Telegram bot
   fleetctl creds <N> [file]             give slot N the Jagex login saved by RuneLite
+  fleetctl forget <N>                   remove slot N's login + game id (random.dat, cache)
+  fleetctl browser <N> [url]            Firefox on slot N's screen through slot N's proxy (make accounts there)
   fleetctl proxy set <N> <url>          slot N goes out through its own proxy (socks5://login:pass@host:port)
   fleetctl proxy off <N> | show | test <N>   home IP again / list / which IP the slot has
                                         on Windows (credentials.properties)
@@ -223,6 +270,9 @@ case "${1:-help}" in
     update) cmd_update ;;
     creds) shift; cmd_creds "$@" ;;
     proxy) shift; cmd_proxy "$@" ;;
+    forget) shift; cmd_forget "$@" ;;
+    browser) shift; cmd_browser "$@" ;;
+    browser-close) shift; cmd_browser_close "$@" ;;
     copy-settings) shift; cmd_copy_settings "$@" ;;
     logs) shift; cmd_logs "$@" ;;
     slots) shift; cmd_slots "$@" ;;

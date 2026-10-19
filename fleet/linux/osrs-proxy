@@ -11,6 +11,11 @@ home IP.
     osrs-proxy off N         back to the home IP
     osrs-proxy show [N]      JSON: which slots use a proxy (no passwords)
     osrs-proxy test N        JSON: the IP (and country) the internet sees for slot N
+    osrs-proxy import [SLOTS] [--forget] [--file F]
+                             read a proxy list (ip:port:user:pass per line) from the
+                             fleet code folder on Windows and give line 1 to the first
+                             slot, line 2 to the next... SLOTS like 1-5 or 1,2,7.
+                             --forget first removes those slots' old logins + game id.
     osrs-proxy apply         rebuild redsocks configs + firewall rules (boot / after changes)
 
 Files: /etc/osrs/proxy/slotN.url (root only, has the password),
@@ -230,8 +235,140 @@ def test(n: int) -> dict:
             return {"error": (res.stderr or res.stdout).strip()[-200:] or "no answer"}
     slot, home = get(f"bot{n}"), get(None)
     on = os.path.exists(url_path(n))
-    ok = bool(slot.get("ip")) and (not on or slot.get("ip") != home.get("ip"))
-    return {"ok": ok, "slot": n, "proxy_on": on, "slot_ip": slot, "home_ip": home}
+    game = game_port_ok(n)
+    ok = bool(slot.get("ip")) and game and (not on or slot.get("ip") != home.get("ip"))
+    return {"ok": ok, "slot": n, "proxy_on": on, "slot_ip": slot, "home_ip": home, "game_port": game}
+
+
+GAME_HOST, GAME_PORT = "oldschool1.runescape.com", 43594
+
+
+def game_port_ok(n: int) -> bool:
+    """Can slot N reach an OSRS game server (port 43594) through its route?"""
+    code = (f"import socket;s=socket.create_connection(('{GAME_HOST}',{GAME_PORT}),timeout=15);"
+            "s.close()")
+    res = subprocess.run(["runuser", "-u", f"bot{n}", "--", "python3", "-c", code],
+                         capture_output=True, text=True, timeout=30)
+    return res.returncode == 0
+
+
+def parse_line(line: str) -> tuple[str, int, str, str] | None:
+    """ip:port:user:pass  |  user:pass@ip:port  |  scheme://user:pass@ip:port  -> (host, port, user, pass)"""
+    line = line.strip().strip(",;")
+    if not line or line.startswith("#"):
+        return None
+    if "://" in line:
+        line = line.split("://", 1)[1]
+    try:
+        if "@" in line:
+            auth, hp = line.rsplit("@", 1)
+            user, pw = auth.split(":", 1)
+            host, port = hp.rsplit(":", 1)
+        else:
+            host, port, user, pw = line.split(":", 3)
+        return host.strip(), int(port), user.strip(), pw.strip()
+    except ValueError:
+        return None
+
+
+def find_list(path: str | None) -> tuple[str, list]:
+    if path:
+        cands = [path]
+    else:
+        src = open("/etc/osrs/source_dir").read().strip()
+        cands = []
+        for d in (src, f"{src}/fleet"):
+            if os.path.isdir(d):
+                cands += [f"{d}/{f}" for f in os.listdir(d)
+                          if f.lower().endswith((".txt", ".csv")) and f != "requirements.txt"]
+    best = ("", [])
+    for c in cands:
+        try:
+            rows = [r for r in map(parse_line, open(c, errors="replace").read().splitlines()) if r]
+        except OSError:
+            continue
+        if len(rows) > len(best[1]):
+            best = (c, rows)
+    if not best[1]:
+        raise RuntimeError("no proxy list found (a .txt with ip:port:user:pass lines in the fleet folder)")
+    return best
+
+
+def parse_slots(spec: str) -> list[int]:
+    out = []
+    for part in spec.split(","):
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out += list(range(int(a), int(b) + 1))
+        elif part.strip():
+            out.append(int(part))
+    return out
+
+
+def forget_slot(n: int):
+    """Stop RuneLite and remove the old login + the game's machine id, BEFORE the
+    new IP is set - so the old (banned) account never logs in from the new IP."""
+    run(["systemctl", "stop", f"osrs-client@{n}.service"], check=False)
+    h = f"/home/bot{n}"
+    for p in (f"{h}/.runelite/credentials.properties", f"{h}/random.dat", f"{h}/.runelite/random.dat"):
+        if os.path.exists(p):
+            os.remove(p)
+    for d in (f"{h}/jagexcache", f"{h}/.runelite/jagexcache"):
+        if os.path.isdir(d):
+            run(["rm", "-rf", d], check=False)
+
+
+def set_url(n: int, url: str):
+    os.makedirs(DIR, mode=0o755, exist_ok=True)
+    fd = os.open(url_path(n), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(url.strip() + "\n")
+
+
+def import_list(slots: list[int], forget: bool, path: str | None) -> dict:
+    from urllib.parse import quote
+    file, rows = find_list(path)
+    if not slots:
+        slots = list(range(1, len(rows) + 1))
+    if len(rows) < len(slots):
+        raise RuntimeError(f"{os.path.basename(file)} has {len(rows)} proxies for {len(slots)} slots")
+    log(f"Proxy list: {file} ({len(rows)} proxies) -> slots {slots}")
+    for n in slots:
+        run(["systemctl", "stop", f"osrs-client@{n}.service"], check=False)
+        if forget:
+            forget_slot(n)
+            log(f"slot {n}: old login and game id removed")
+    report = {}
+    for n, (host, port, user, pw) in zip(slots, rows):
+        auth = f"{quote(user, safe='')}:{quote(pw, safe='')}@"
+        # Try what the proxy speaks: HTTP on its port, SOCKS5 on it, then SOCKS5 on port+1
+        # (some providers give SOCKS5 one port up). Keep the first one that reaches the game.
+        tries = [f"http://{auth}{host}:{port}", f"socks5://{auth}{host}:{port}",
+                 f"socks5://{auth}{host}:{port + 1}"]
+        good = None
+        for url in tries:
+            set_url(n, url)
+            apply()
+            import time
+            time.sleep(2)
+            t = test(n)
+            log(f"slot {n}: {url.split('://')[0]} :{url.rsplit(':', 1)[1]} -> "
+                f"ip {t['slot_ip'].get('ip', '-')} {t['slot_ip'].get('country', '')} game port {'ok' if t['game_port'] else 'NO'}")
+            if t["ok"]:
+                good = t
+                break
+        if good:
+            report[n] = {"ok": True, "ip": good["slot_ip"].get("ip"), "country": good["slot_ip"].get("country"),
+                         "city": good["slot_ip"].get("city")}
+        else:
+            report[n] = {"ok": False, "error": "proxy did not work (kept on: this slot has NO internet)"}
+    for n in slots:
+        run(["systemctl", "start", f"osrs-client@{n}.service"], check=False)
+    return {"ok": all(r["ok"] for r in report.values()), "file": file, "slots": report}
+
+
+def log(msg: str):
+    print(msg, file=sys.stderr, flush=True)
 
 
 def main():
@@ -257,6 +394,17 @@ def main():
             r = show(int(a[1]) if len(a) > 1 else None)
         elif a[:1] == ["test"] and len(a) == 2:
             r = test(int(a[1]))
+        elif a[:1] == ["import"]:
+            rest, forget, path, spec = a[1:], False, None, ""
+            while rest:
+                x = rest.pop(0)
+                if x == "--forget":
+                    forget = True
+                elif x == "--file" and rest:
+                    path = rest.pop(0)
+                else:
+                    spec = x
+            r = import_list(parse_slots(spec) if spec else [], forget, path)
         elif a == ["apply"]:
             r = apply()
         else:

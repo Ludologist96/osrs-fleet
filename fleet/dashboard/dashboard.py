@@ -164,6 +164,11 @@ ACTIONS = {
     "creds": lambda n: ["/opt/osrs/bin/fleetctl", "creds", str(n)],
     # Copy slot 1's RuneLite plugins/settings to slot N (logins are not copied).
     "copy-settings": lambda n: ["/opt/osrs/bin/fleetctl", "copy-settings", "1", str(n)],
+    # Remove slot N's login + the game's machine id (random.dat, cache) - for a fresh account.
+    "forget": lambda n: ["/opt/osrs/bin/fleetctl", "forget", str(n)],
+    # Firefox on slot N's screen, through slot N's proxy (only if it has one) - make accounts there.
+    "browser": lambda n: ["/opt/osrs/bin/fleetctl", "browser", str(n), "https://www.runescape.com/"],
+    "browser-close": lambda n: ["/opt/osrs/bin/fleetctl", "browser-close", str(n)],
 }
 
 
@@ -378,6 +383,15 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= n <= 30:
                 return self._json({"ok": False, "error": "n must be 1..30"}, 400)
             return self._json(start_update("slots", str(n)))
+        if self.path == "/api/fleet/proxy-import":
+            # {"slots": "1-5", "forget": true}: proxy list from the Windows fleet folder -> those slots.
+            # Runs in the background; its log: /api/update-log/<unit>.
+            b = self._body()
+            spec = str(b.get("slots", ""))
+            if not re.fullmatch(r"[0-9,\-]*", spec):
+                return self._json({"ok": False, "error": "slots like 1-5 or 1,2,3"}, 400)
+            args = ["proxy", "import"] + ([spec] if spec else []) + (["--forget"] if b.get("forget") else [])
+            return self._json(start_update(*args))
         if self.path == "/api/fleet/restart-vm":
             # restart the whole VM (all slots go down for ~30 s; RuneLite logs out)
             res = subprocess.run(["/opt/osrs/bin/fleetctl", "restart-vm"], capture_output=True, text=True, timeout=60)

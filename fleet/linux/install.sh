@@ -73,6 +73,7 @@ rsync -a --delete \
     --exclude '.git/' --exclude '.venv/' --exclude '__pycache__/' \
     --exclude 'node_modules/' --exclude '*.log' \
     --exclude 'data/configs/slot*/' \
+    --include '/requirements.txt' --exclude '/*.txt' --exclude '/*.csv' --exclude '/fleet/*.txt' --exclude '/fleet/*.csv' \
     "$REPO/" "$APP_DIR/"
 chown -R root:osrs "$APP_DIR"
 chmod -R g+rwX "$APP_DIR"

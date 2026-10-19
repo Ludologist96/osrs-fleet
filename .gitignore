@@ -193,3 +193,10 @@ fleet/telegram/config.ini
 
 # item icon cache (core/item_db.py IconStore)
 data/items/icons.sqlite
+
+# Proxy lists (have passwords) - never commit
+/*.txt
+!/requirements.txt
+/*.csv
+/fleet/*.txt
+/fleet/*.csv

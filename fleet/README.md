@@ -275,3 +275,15 @@ everything else that user sends (except DNS), so if the proxy is down the slot h
 instead of falling back to the home IP. RuneLite on a proxied slot only starts once those rules
 and the slot's redsocks are up (`osrs-proxy-rules.service` rebuilds them at boot).
 The password is kept in `/etc/osrs/proxy/slotN.url` (root only), never in the repo.
+
+### Proxy list, fresh accounts
+
+- Put the provider's list (`ip:port:user:pass` per line, .txt) in the fleet folder on Windows.
+  It is gitignored and not copied into the VM's code folder. Launcher page -> **Proxies** ->
+  slots `1-5` -> Import. With "remove old logins" ticked, each slot is first logged out for good
+  and its game machine id (`random.dat`) and game cache are deleted - before the new IP is set,
+  so an old account never logs in from the new IP. Each slot tries HTTP, then SOCKS5, and keeps
+  the one that reaches the OSRS game port.
+- New account on a proxied slot: **proxy** button -> **Open browser here** opens Firefox on that
+  slot's screen; it can only go out through that slot's proxy. Create the Jagex account there.
+- `fleetctl forget N` / **Forget login**: remove one slot's login + game id.
