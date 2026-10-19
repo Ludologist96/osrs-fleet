@@ -435,7 +435,11 @@ class BotExecutor(Bot):
         """Left-click the tile if its top action is "Take <wanted item>"; otherwise (another
         item or a monster on top) pick "Take <item>" from the right-click menu."""
         hovers = [f"Take {n}" for n in names]
-        inner = tile.scale_px(-max(2, min(tile.width, tile.height) // 4))
+        # items lie in the middle of the tile (the outline is a diamond, its box corners are
+        # off the tile): aim at the centre third
+        cx, cy = (tile.start_x + tile.end_x) // 2, (tile.start_y + tile.end_y) // 2
+        dx, dy = max(2, tile.width // 6), max(2, tile.height // 6)
+        inner = MatchResult(cx - dx, cy - dy, cx + dx, cy + dy)
         if self.hover_click(inner, hovers, tries=1):
             return True
         # the cursor is on the tile now: open the menu there
