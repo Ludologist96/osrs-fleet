@@ -58,6 +58,12 @@ cmd_update() {
     install -m 755 "$src/fleet/linux/slot" /opt/osrs/bin/slot
     install -m 755 "$src/fleet/linux/fleetctl" /opt/osrs/bin/fleetctl
     install -m 755 "$src/fleet/linux/osrs-proxy" /opt/osrs/bin/osrs-proxy
+    # An older osrs-proxy could deadlock (rules service <-> osrs-proxy@N restart): unstick it.
+    if [ "$(systemctl is-active osrs-proxy-rules.service 2>/dev/null)" = activating ]; then
+        echo "Proxy rules service was stuck - restarting it"
+        systemctl kill osrs-proxy-rules.service 2>/dev/null || true
+        systemctl stop --no-block osrs-proxy-rules.service 2>/dev/null || true
+    fi
     new_sha=$(sha256sum "$APP_DIR/requirements.txt" | cut -d' ' -f1)
     if [ "$new_sha" != "$(cat /opt/osrs/.requirements.sha 2>/dev/null)" ]; then
         echo "requirements.txt changed - updating Python packages"
@@ -78,7 +84,7 @@ cmd_update() {
     echo "Restarting bot apps and dashboard (RuneLite clients keep running)"
     for n in $(seq 1 "$SLOTS"); do systemctl restart "osrs-app@$n.service"; done
     systemctl enable osrs-proxy-rules.service >/dev/null 2>&1 || true
-    systemctl start osrs-proxy-rules.service || true
+    systemctl start --no-block osrs-proxy-rules.service || true
     systemctl enable osrs-telegram.service >/dev/null 2>&1 || true
     systemctl restart osrs-telegram.service || true
     systemctl restart osrs-dashboard.service
