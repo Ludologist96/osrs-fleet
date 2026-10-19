@@ -92,7 +92,7 @@ class Bot:
             time.sleep(random.uniform(0.8, 1.4))
             sc = self.client.get_screenshot()
             # search the right part of the window (side panel)
-            tp = MatchResult(sc.width // 2, 0, sc.width, sc.height)
+            tp = MatchResult(int(sc.width * 0.65), 0, sc.width, sc.height)
             arr = np.asarray(tp.crop_in(sc).convert("RGB"), dtype=np.int16)
             r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
             red = ((r >= 110) & (g <= 60) & (b <= 60) & (r - g >= 70)).astype(np.uint8)
