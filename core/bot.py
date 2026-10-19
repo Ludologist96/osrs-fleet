@@ -72,11 +72,27 @@ class Bot:
         from core import login
         from core.osrs_client import ToolplaneTab
         from core.region_match import MatchResult
+        from PIL import Image
+        from core import tools
         for attempt in range(3):
-            self.client.click_toolplane(ToolplaneTab.LOGOUT)
-            time.sleep(random.uniform(0.6, 1.2))
+            # the door icon at the bottom of the side panel (click it directly: the
+            # tab-state check can think it's already open)
+            door = getattr(self.client.toolplane, "logout", None)
+            try:
+                found = tools.find_subimage(self.client.get_screenshot(), Image.open("data/ui/logout.webp"),
+                                            min_scale=1, max_scale=1)
+                if found.confidence >= 0.8:
+                    door = found
+            except Exception:
+                pass
+            if door is None:
+                raise RuntimeError("logout tab icon not found")
+            self.log.debug(f"Logout tab icon at {door.bounding_box}")
+            self.client.click(door.scale_px(-3).get_point_within())
+            time.sleep(random.uniform(0.8, 1.4))
             sc = self.client.get_screenshot()
-            tp = self.client.sectors.toolplane
+            # search the right part of the window (side panel)
+            tp = MatchResult(sc.width // 2, 0, sc.width, sc.height)
             arr = np.asarray(tp.crop_in(sc).convert("RGB"), dtype=np.int16)
             r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
             red = ((r >= 110) & (g <= 60) & (b <= 60) & (r - g >= 70)).astype(np.uint8)
