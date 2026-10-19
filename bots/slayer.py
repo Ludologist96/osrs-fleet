@@ -107,7 +107,8 @@ BAR_TOL = 30
 BAR_MIN_RUN = 50     # px: the bar is ~120+ px wide
 BAR_MIN_ROWS = 4     # px: and several px high
 BAR_SEARCH = (0, 0, 330, 170)  # window-relative area where the overlay sits (top-left)
-LOOT_MIN_SIZE = 16   # px: a tile outline is bigger than this both ways (item name text is ~10-13 px high)
+LOOT_MIN_W, LOOT_MIN_H = 14, 9  # px: smallest tile outline (camera zoomed far out)
+LOOT_MAX_FILL = 0.6  # tile outline blob is mostly empty inside (text blobs: 0.65-0.85)
 MENU_HEADER = 19     # px: 'Choose Option' row of the right-click menu
 MENU_LINE = 15       # px: one menu entry
 HOVER_SIM = 0.72     # OCR'd mouse-over text vs wanted text (OCR misreads letters)
@@ -369,8 +370,9 @@ class BotExecutor(Bot):
             cx, cy = x + w / 2, y + h / 2
             d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
             seen.append((int(x), int(y), int(w), int(h), int(area), round(d)))
-            if w < LOOT_MIN_SIZE or h < LOOT_MIN_SIZE:
-                continue  # item name text, not a tile
+            # a tile is a hollow diamond outline; item names are dense, flat rows of letters
+            if w < LOOT_MIN_W or h < LOOT_MIN_H or area / float(w * h) > LOOT_MAX_FILL or w > 4 * h:
+                continue
             if d > self.cfg.loot_max_distance.value:
                 continue
             found.append((d, MatchResult(int(x), int(y), int(x + w), int(y + h))))
