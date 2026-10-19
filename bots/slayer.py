@@ -521,7 +521,8 @@ class BotExecutor(Bot):
         mid = [r[2] for r in rows[3:10] if r[1] > 0]
         hollow = bool(mid) and sum(mid) / len(mid) < 0.4  # tile outline: only its 2 sides
         pts = []
-        if hollow and rows[0][1] <= 6:
+        widening = rows[0][1] <= 6 and rows[2][1] < rows[4][1] < rows[6][1]
+        if widening or (hollow and rows[0][1] <= 6):
             # diamond (camera turned): bottom corner, widens going up; items in its middle
             for k in (4, 7, 10, 14, 18, 23, 28):
                 pts.append((vx + random.randint(-2, 2), ymax - k))
@@ -567,6 +568,7 @@ class BotExecutor(Bot):
             if not pts:
                 return
             before_slots = self._free_slots()
+            before_items = self._count_items(names)
             if not self._take_from_points(pts, names):
                 pts2 = self._zoom_in_for_pile(pts)
                 if not pts2 or not self._take_from_points(pts2, names):
@@ -577,7 +579,7 @@ class BotExecutor(Bot):
             deadline = time.time() + float(self.cfg.pickup_timeout.value)
             while time.time() < deadline and not self.terminate:
                 time.sleep(random.uniform(0.4, 0.7))
-                if self._free_slots() < before_slots:
+                if self._free_slots() < before_slots or self._count_items(names) > before_items:
                     self.looted += 1
                     self.log.info(f"Picked up loot ({self.looted} so far)")
                     break
@@ -612,6 +614,12 @@ class BotExecutor(Bot):
             time.sleep(random.uniform(0.2, 0.6))
             self.camera.zoom_by(-n)
             self._loot_zoom = 0
+
+    def _count_items(self, names: list[str]) -> int:
+        try:
+            return len(self.client.get_inv_items(names, min_confidence=0.85))
+        except Exception:
+            return 0
 
     def _take_from_points(self, pts: list[tuple[int, int]], names: list[str]) -> bool:
         """Move the mouse up the pile; left-click as soon as the mouse-over says
