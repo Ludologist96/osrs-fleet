@@ -53,6 +53,12 @@ class BotConfig(BotConfigMixin):
     # Highlights smaller than this (pixels of outline) are ignored (far away / half hidden).
     min_npc_pixels: IntParam = IntParam(60)
     targets_per_try: IntParam = IntParam(4)  # highlighted monsters to try per round
+    # Monsters behind a fence: most of the herd is on our side, strays are often not.
+    # Prefer monsters with others near them; avoid where an attack just failed.
+    herd_radius: IntParam = IntParam(110)        # px: monsters closer than this count as neighbours
+    herd_weight: FloatParam = FloatParam(35.0)   # px of distance one neighbour is worth
+    lone_penalty: FloatParam = FloatParam(120.0) # extra px for a monster with no neighbours
+    unreachable_memory: FloatParam = FloatParam(45.0)  # s: skip spots where a fight didn't start
 
     # --- fighting ---
     # After clicking a monster, wait up to this long for the fight to start (walking there).
@@ -79,6 +85,7 @@ class BotConfig(BotConfigMixin):
     max_loot_per_kill: IntParam = IntParam(4)      # pick-ups to try after one kill
     pickup_timeout: FloatParam = FloatParam(8.0)   # walk there + pick up
     use_delay: RangeParam = RangeParam(1.1, 1.7)   # between burying bones (one per ~1.2 s)
+    loot_zoom_notches: IntParam = IntParam(2)      # item not found: zoom in this much, try again, zoom back
 
     # --- nothing to attack ---
     no_target_wait: RangeParam = RangeParam(1.5, 4.0)
@@ -147,6 +154,7 @@ class BotExecutor(Bot):
         self.looted = 0
         self.full_warned = False
         self.attack_hover = [f"Attack {t}" for t in self.cfg.targets.value]
+        self.unreachable: list[tuple[float, int, int]] = []  # (time, x, y) of failed attacks
 
     # ------------------------------------------------------------------
     def start(self):
@@ -336,12 +344,11 @@ class BotExecutor(Bot):
         if not targets:
             self.log.debug("No highlighted monster on screen")
             return False
-        # mostly the nearest, sometimes the 2nd/3rd - players don't always pick the closest
+        order = self._rank_targets(targets)
+        # mostly the best, sometimes the 2nd - players don't always pick the same way
+        if len(order) > 1 and random.random() < 0.2:
+            order.insert(0, order.pop(1))
         tried = 0
-        order = targets[:]
-        if len(order) > 1 and random.random() < 0.3:
-            k = random.randint(1, min(2, len(order) - 1))
-            order.insert(0, order.pop(k))
         for m in order[: self.cfg.targets_per_try.value]:
             tried += 1
             # aim a bit inside the hull, not at its edge
@@ -351,9 +358,34 @@ class BotExecutor(Bot):
                 continue
             if self._wait_fight_start():
                 return True
-            self.log.info("Fight didn't start (someone else's, or unreachable); trying another")
+            cx, cy = m.get_center()
+            self.unreachable.append((time.time(), cx, cy))
+            self.log.info("Fight didn't start (someone else's, or unreachable, e.g. behind a fence); "
+                          "avoiding that spot for a while")
         self.log.debug(f"Tried {tried} highlighted monsters, none attackable")
         return False
+
+    def _rank_targets(self, targets: list[MatchResult]) -> list[MatchResult]:
+        """Near the character and in the herd first; lone strays (often behind a fence) and
+        spots where an attack just failed last."""
+        now = time.time()
+        self.unreachable = [u for u in self.unreachable if now - u[0] < self.cfg.unreachable_memory.value]
+        px, py = self._player_point()
+        centers = [m.get_center() for m in targets]
+        r = self.cfg.herd_radius.value
+        scored = []
+        for m, (cx, cy) in zip(targets, centers):
+            dist = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+            neighbours = sum(1 for (ox, oy) in centers
+                             if (ox, oy) != (cx, cy) and ((ox - cx) ** 2 + (oy - cy) ** 2) ** 0.5 < r)
+            score = dist - self.cfg.herd_weight.value * min(neighbours, 4)
+            if neighbours == 0 and len(targets) > 2:
+                score += self.cfg.lone_penalty.value
+            if any(((cx - ux) ** 2 + (cy - uy) ** 2) ** 0.5 < 50 for _, ux, uy in self.unreachable):
+                score += 1000  # tried there a moment ago and couldn't get to it
+            scored.append((score, m))
+        scored.sort(key=lambda t: t[0])
+        return [m for _, m in scored]
 
     # ------------------------------------------------------------------ loot
     def _player_point(self) -> tuple[int, int]:
@@ -508,8 +540,11 @@ class BotExecutor(Bot):
                 return
             before_slots = self._free_slots()
             if not self._take_from_points(pts, names):
-                self.log.info("Couldn't find a wanted item on the pile")
-                return
+                pts2 = self._zoom_in_for_pile(pts)
+                if not pts2 or not self._take_from_points(pts2, names):
+                    self.log.info("Couldn't find a wanted item on the pile")
+                    self._zoom_back()
+                    return
             # wait until it lands in the inventory (walk there + pick up)
             deadline = time.time() + float(self.cfg.pickup_timeout.value)
             while time.time() < deadline and not self.terminate:
@@ -520,8 +555,35 @@ class BotExecutor(Bot):
                     break
             else:
                 self.log.info("Pick-up didn't happen (someone else took it?)")
+                self._zoom_back()
                 return
             time.sleep(random.uniform(0.2, 0.6))
+        self._zoom_back()
+
+    def _zoom_in_for_pile(self, pts: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        """Items too small to hit: zoom in a little and look for the pile again
+        (zooming moves it away from the screen centre, so search around where it should be)."""
+        n = self.cfg.loot_zoom_notches.value
+        if n <= 0 or getattr(self, "_loot_zoom", 0):
+            return []
+        done = self.camera.zoom_by(n)
+        if not done:
+            return []
+        self._loot_zoom = done
+        time.sleep(random.uniform(0.3, 0.6))
+        px, py = self._player_point()
+        x, y = pts[min(2, len(pts) - 1)]
+        pred = (int(px + (x - px) * 1.35), int(py + (y - py) * 1.35))
+        found = self._pile_points(self._loot_mask(), around=pred, radius=90)
+        self.log.info(f"Zoomed in {done} to see the pile better ({'found it' if found else 'still nothing'})")
+        return found
+
+    def _zoom_back(self):
+        n = getattr(self, "_loot_zoom", 0)
+        if n:
+            time.sleep(random.uniform(0.2, 0.6))
+            self.camera.zoom_by(-n)
+            self._loot_zoom = 0
 
     def _take_from_points(self, pts: list[tuple[int, int]], names: list[str]) -> bool:
         """Move the mouse up the pile; left-click as soon as the mouse-over says
