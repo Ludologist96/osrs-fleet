@@ -374,9 +374,6 @@ class BotExecutor(Bot):
             # a tile is a hollow diamond outline; item names are dense, flat rows of letters
             if w < LOOT_MIN_W or h < LOOT_MIN_H or area / float(w * h) > LOOT_MAX_FILL or w > 4 * h:
                 continue
-            # ...and empty in the middle (two stacked name labels can look hollow too)
-            if raw[y + int(h * 0.35): y + int(h * 0.65), x + int(w * 0.3): x + int(w * 0.7)].any():
-                continue
             if d > self.cfg.loot_max_distance.value:
                 continue
             found.append((d, MatchResult(int(x), int(y), int(x + w), int(y + h))))
@@ -416,7 +413,8 @@ class BotExecutor(Bot):
             piles.append(ln)
         out = []
         for x1, y1, x2, y2 in piles:
-            cx, cy = (x1 + x2) // 2, y2 + 9
+            # seen: the lowest label's bottom edge is about level with the item (tile centre)
+            cx, cy = (x1 + x2) // 2, y2 + 3
             d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
             if d <= self.cfg.loot_max_distance.value:
                 out.append((d, MatchResult(cx - 5, cy - 4, cx + 5, cy + 4)))
@@ -477,12 +475,13 @@ class BotExecutor(Bot):
         item or a monster on top) pick "Take <item>" from the right-click menu."""
         hovers = [f"Take {n}" for n in names]
         # items lie in the middle of the tile (the outline is a diamond, its box corners are
-        # off the tile): aim at the centre third
+        # off the tile) and their models are small: try a few points around the centre
         cx, cy = (tile.start_x + tile.end_x) // 2, (tile.start_y + tile.end_y) // 2
         dx, dy = max(2, tile.width // 6), max(2, tile.height // 6)
         inner = MatchResult(cx - dx, cy - dy, cx + dx, cy + dy)
-        if self.hover_click(inner, hovers, tries=1):
+        if self.hover_click(inner, hovers, tries=3):
             return True
+        self.client.move_to(inner.get_point_within(), rand_move_chance=0)
         # the cursor is on the tile now: open the menu there
         click(-1, -1, click_type=ClickType.RIGHT)
         time.sleep(random.uniform(0.25, 0.45))
