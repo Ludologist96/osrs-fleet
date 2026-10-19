@@ -210,9 +210,10 @@ class BotExecutor(Bot):
         try:
             sc = self.client.get_screenshot()
             h = self.client.minimap.health
-            # the number sits just left of the orb icon (seen: orb x 568-590, digits x 534-545)
-            x1, y1 = max(0, h.start_x - 40), max(0, h.start_y)
-            x2, y2 = h.start_x - 1, h.end_y
+            # the number sits left of the orb (seen: orb icon x 568-590, its red-filled
+            # circle from ~550, digits "10" at x 531-538): stay clear of the circle
+            x1, y1 = max(0, h.start_x - 46), max(0, h.start_y)
+            x2, y2 = h.start_x - 20, h.end_y
             arr = np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2)), dtype=np.int16)
             r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
             # text pixels: fully saturated, one of red/green at max, no blue
@@ -224,7 +225,7 @@ class BotExecutor(Bot):
             if not getattr(self, "_hp_logged", False):
                 self._hp_logged = True
                 self.log.debug(f"HP orb {h.bounding_box}, search ({x1},{y1})-({x2},{y2}); number pixels "
-                               f"{sorted(set((int(x) + x1, int(y) + y1, int(r[y, x]), int(g[y, x])) for y, x in zip(ys, xs)))[:60]}")
+                               f"{sorted(set((int(x) + x1, int(r[y, x]), int(g[y, x])) for y, x in zip(ys, xs)))[:40]}")
             rm, gm = float(r[txt].mean()), float(g[txt].mean())
             if gm >= rm:   # green .. yellow: 100% .. 50%
                 pct = 100 - 50 * rm / 255
