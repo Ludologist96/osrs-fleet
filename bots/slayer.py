@@ -209,8 +209,9 @@ class BotExecutor(Bot):
         try:
             sc = self.client.get_screenshot()
             h = self.client.minimap.health
-            x1, y1 = max(0, h.start_x - 34), max(0, h.start_y - 4)
-            x2, y2 = h.end_x + 4, h.end_y + 12
+            # the number sits just left of the orb icon (seen: orb x 568-590, digits x 534-545)
+            x1, y1 = max(0, h.start_x - 40), max(0, h.start_y)
+            x2, y2 = h.start_x - 1, h.end_y
             arr = np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2)), dtype=np.int16)
             r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
             # text pixels: fully saturated, one of red/green at max, no blue
