@@ -60,6 +60,11 @@ class BotConfig(BotConfigMixin):
     # Pause after a kill before looking for the next monster (reaction time).
     after_kill_delay: RangeParam = RangeParam(0.4, 2.2)
 
+    # --- health (no food yet): below min_hp don't start a fight, rest until resume_hp ---
+    min_hp: IntParam = IntParam(5)
+    resume_hp: IntParam = IntParam(9)
+    rest_check: RangeParam = RangeParam(20, 40)  # seconds between HP checks while resting
+
     # --- loot (RuneLite Ground Items highlights these; the launcher sets it) ---
     loot: BooleanParam = BooleanParam(True)
     loot_use: StringListParam = StringListParam(["Bones"])     # pick up and use at once (bury / eat)
@@ -168,6 +173,9 @@ class BotExecutor(Bot):
             self._wait_fight_end()
             return
         # not fighting (no bar, or the last target's bar is empty)
+        hp = self._hp()
+        if hp is not None and hp < self.cfg.min_hp.value:
+            return self._rest(hp)
         if self.kills and random.random() < self.cfg.camera_chance.value:
             self.camera.random_move(self.cfg.camera_rotate_time.value, self.cfg.camera_zoom_chance.value)
         if self.attack():
@@ -182,6 +190,33 @@ class BotExecutor(Bot):
         wait = self.cfg.no_target_wait.choose()
         self.log.info(f"Nothing to attack; waiting {wait:.1f}s ({self.no_target}/{self.cfg.max_no_target.value})")
         time.sleep(wait)
+
+    # ------------------------------------------------------------------ health
+    def _hp(self) -> int | None:
+        """Hitpoints from the minimap orb (None if it can't be read)."""
+        try:
+            sc = self.client.get_screenshot()
+            v = self.client.minimap.get_minimap_stat(self.client.minimap.health, sc)
+            return int(v) if v else None
+        except Exception as e:
+            self.log.debug(f"Couldn't read HP: {e}")
+            return None
+
+    def _rest(self, hp: int):
+        """Too hurt to fight and nothing to eat: stand still until HP comes back
+        (about 1 HP a minute). Breaks still happen meanwhile."""
+        self.log.warning(f"HP {hp} < {self.cfg.min_hp.value}: resting until {self.cfg.resume_hp.value}")
+        start = time.time()
+        while not self.terminate and time.time() - start < 40 * 60:
+            time.sleep(self.cfg.rest_check.choose())
+            self.control.propose_break()
+            hp = self._hp()
+            if hp is not None and hp >= self.cfg.resume_hp.value:
+                self.log.info(f"HP {hp}: back to fighting")
+                return
+        if not self.terminate:
+            self.log.error("HP didn't come back after 40 min. Stopping.")
+            return "stop"
 
     # ------------------------------------------------------------------ combat state
     def opponent_bar(self, sc: Image.Image | None = None) -> tuple[int, int] | None:
@@ -298,19 +333,20 @@ class BotExecutor(Bot):
         mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
         num, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         px, py = self._player_point()
-        found = []
+        found, seen = [], []
         for i in range(1, num):
-            x, y, w, h, _ = stats[i]
-            if w < LOOT_MIN_SIZE or h < LOOT_MIN_SIZE:
-                continue  # item name text, not a tile
+            x, y, w, h, area = stats[i]
             cx, cy = x + w / 2, y + h / 2
             d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+            seen.append((int(x), int(y), int(w), int(h), int(area), round(d)))
+            if w < LOOT_MIN_SIZE or h < LOOT_MIN_SIZE:
+                continue  # item name text, not a tile
             if d > self.cfg.loot_max_distance.value:
                 continue
             found.append((d, MatchResult(int(x), int(y), int(x + w), int(y + h))))
         found.sort(key=lambda t: t[0])
-        self.log.debug(f"Loot tiles: {num - 1} purple blobs, {len(found)} near enough "
-                       f"(player at {px},{py}): {[(round(d), m.bounding_box) for d, m in found[:4]]}")
+        self.log.debug(f"Loot tiles: {len(found)} usable of {num - 1} purple blobs (player at {px},{py}); "
+                       f"blobs x,y,w,h,area,dist: {seen[:8]}")
         return [m for _, m in found]
 
     def _wanted_loot(self) -> list[str]:
