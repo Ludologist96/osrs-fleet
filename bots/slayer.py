@@ -32,6 +32,8 @@ from core.camera import Camera
 from core.region_match import MatchResult
 from core.control import ScriptTerminationException
 from core.logger import get_logger
+from core import tools, ocr
+from core.input.mouse_control import click, ClickType
 
 from PIL import Image
 import numpy as np
@@ -103,7 +105,10 @@ BAR_TOL = 30
 BAR_MIN_RUN = 50     # px: the bar is ~120+ px wide
 BAR_MIN_ROWS = 4     # px: and several px high
 BAR_SEARCH = (0, 0, 330, 170)  # window-relative area where the overlay sits (top-left)
-LOOT_MIN_SIZE = 14   # px: a tile outline is bigger than this both ways (item names are flatter)
+LOOT_MIN_SIZE = 16   # px: a tile outline is bigger than this both ways (item name text is ~10-13 px high)
+MENU_HEADER = 19     # px: 'Choose Option' row of the right-click menu
+MENU_LINE = 15       # px: one menu entry
+HOVER_SIM = 0.72     # OCR'd mouse-over text vs wanted text (OCR misreads letters)
 
 
 def hue_mask(img: Image.Image, rgb, hue_tol: int = 10, min_sat: int = 110, min_val: int = 80) -> np.ndarray:
@@ -309,10 +314,8 @@ class BotExecutor(Bot):
             tried += 1
             # aim a bit inside the hull, not at its edge
             inner = m.scale_px(-max(2, min(m.width, m.height) // 5))
-            try:
-                self.client.smart_click_match(inner, self.attack_hover, retry_hover=2)
-            except RuntimeError as e:
-                self.log.debug(f"Not attackable here ({e})")
+            if not self.hover_click(inner, self.attack_hover, tries=2):
+                self.log.debug("Not attackable here")
                 continue
             if self._wait_fight_start():
                 return True
@@ -392,33 +395,85 @@ class BotExecutor(Bot):
             time.sleep(random.uniform(0.15, 0.5))
 
     def _take(self, tile: MatchResult, names: list[str]) -> bool:
-        """Left-click the tile if its top action is "Take <wanted item>"; if something else
-        is on top (a monster standing there), choose "Take <item>" from the right-click menu."""
+        """Left-click the tile if its top action is "Take <wanted item>"; otherwise (another
+        item or a monster on top) pick "Take <item>" from the right-click menu."""
         hovers = [f"Take {n}" for n in names]
         inner = tile.scale_px(-max(2, min(tile.width, tile.height) // 4))
-        try:
-            self.client.smart_click_match(inner, hovers, retry_hover=1)
+        if self.hover_click(inner, hovers, tries=1):
             return True
-        except RuntimeError:
-            pass
-        # right-click menu: lists everything on the tile
-        from core.input.mouse_control import click, ClickType
-        try:
-            click(-1, -1, click_type=ClickType.RIGHT)
-            time.sleep(random.uniform(0.25, 0.45))
-            for h in hovers:
-                try:
-                    self.client.choose_right_click_opt(h)
-                    self.log.debug(f"Chose '{h}' from the menu")
-                    return True
-                except Exception:
-                    continue
-        except Exception as e:
-            self.log.debug(f"Right-click take failed: {e}")
+        # the cursor is on the tile now: open the menu there
+        click(-1, -1, click_type=ClickType.RIGHT)
+        time.sleep(random.uniform(0.25, 0.45))
+        if self.menu_pick(hovers):
+            return True
         # nothing wanted there: the game closes the menu when the mouse moves away from it
         x, y = self.client.mouse_position()
         self.client.move_to((max(10, x + random.choice((-1, 1)) * random.randint(140, 200)),
                              max(10, y + random.randint(-40, 40))), rand_move_chance=0)
+        return False
+
+    # ------------------------------------------------------------------ text-checked clicks
+    @staticmethod
+    def text_matches(text: str, wanted: str) -> bool:
+        """OCR-tolerant: 'Taka Cowids' matches 'Take Cowhide'. The verb and the name are
+        checked separately so 'Attack Chicken' never passes for 'Attack Cow'."""
+        text = (text or "").lower().strip()
+        if not text:
+            return False
+        verb, _, name = wanted.lower().partition(" ")
+        if tools.text_similarity(text, verb) < HOVER_SIM:
+            return False
+        rest = text.split(" ", 1)[1] if " " in text else text
+        if len(name) <= 4:
+            return name in rest
+        from difflib import SequenceMatcher
+        sim = max(tools.text_similarity(rest, name),  # name inside a longer text
+                  SequenceMatcher(None, rest[:len(name) + 2], name).ratio())  # OCR dropped letters
+        return sim >= HOVER_SIM
+
+    def hover_click(self, rect: MatchResult, wanted: list[str], tries: int = 2,
+                    click_type=None) -> bool:
+        """Move into `rect` (centre-weighted), click only if the mouse-over text is one of `wanted`."""
+        for _ in range(tries):
+            self.client.move_to(rect.get_point_within(), rand_move_chance=0)
+            time.sleep(random.uniform(0.1, 0.22))
+            answers = self.client.get_hover_texts()
+            if any(self.text_matches(a, w) for a in answers for w in wanted):
+                click(-1, -1, click_type=click_type or ClickType.LEFT)
+                return True
+            self.log.debug(f"Mouse-over {answers} isn't {wanted}")
+        return False
+
+    def menu_pick(self, wanted: list[str]) -> bool:
+        """Read the open right-click menu line by line and click the first wanted entry."""
+        try:
+            sc = self.client.get_screenshot()
+            menu = self.client.get_right_click_menu(sc)
+        except Exception as e:
+            self.log.debug(f"No right-click menu found: {e}")
+            return False
+        n = max(1, round((menu.height - MENU_HEADER) / MENU_LINE))
+        lines = []
+        for i in range(n):
+            y1 = menu.start_y + MENU_HEADER + i * MENU_LINE
+            row = MatchResult(menu.start_x + 3, y1, menu.end_x - 3, y1 + MENU_LINE)
+            img = tools.mask_above_color_value(row.crop_in(sc), 150)
+            try:
+                text = ocr.execute(img, font=ocr.FontChoice.RUNESCAPE_BOLD_12,
+                                   psm=ocr.TessPsm.SINGLE_LINE, raise_on_blank=False).strip()
+            except Exception:
+                text = ""
+            lines.append(text)
+            for w in wanted:
+                if self.text_matches(text, w):
+                    self.log.debug(f"Menu {lines}: choosing line {i + 1} '{text}' for '{w}'")
+                    # aim at the text part of the line, not the menu edge
+                    target = MatchResult(row.start_x + 4, y1 + 3,
+                                         min(row.end_x - 4, row.start_x + 4 + 7 * len(w)), y1 + MENU_LINE - 3)
+                    self.client.move_to(target.get_point_within(), rand_move_chance=0)
+                    click(-1, -1)
+                    return True
+        self.log.debug(f"Menu {lines}: nothing wanted")
         return False
 
     def use_items(self):
@@ -437,10 +492,10 @@ class BotExecutor(Bot):
             if not items:
                 return
             m = items[0]
-            try:
-                self.client.smart_click_match(m.scale_px(-6), names, retry_hover=2)
-            except RuntimeError as e:
-                self.log.debug(f"Not using item ({e})")
+            # mouse-over of an inventory item: "Bury Bones", "Eat Trout"...
+            wanted = [f"{v} {n}" for n in names for v in ("Bury", "Eat", "Drink", "Use")]
+            if not self.hover_click(m.scale_px(-6), wanted, tries=2):
+                self.log.debug("Inventory item's mouse-over didn't match; not using it")
                 return
             self.log.info("Used an item")
             time.sleep(self.cfg.use_delay.choose())
