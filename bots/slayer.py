@@ -300,8 +300,10 @@ class BotExecutor(Bot):
                 self.kills += 1
                 self.log.info(f"Target down ({state}) after {time.time() - start:.0f}s - kills: {self.kills}")
                 if self.cfg.loot.value:
+                    # what's purple on screen as the monster dies: the drop will be what's new
+                    before = self._loot_mask()
                     time.sleep(self.cfg.loot_wait.choose())
-                    self.pick_up_loot()
+                    self.pick_up_loot(before)
                     self.use_items()
                 time.sleep(self.cfg.after_kill_delay.choose())
                 return
@@ -439,36 +441,122 @@ class BotExecutor(Bot):
         self._open_inventory()
         return 28 - len(inventory.used_slots(self.client.get_screenshot()))
 
-    def pick_up_loot(self):
-        last = None  # tile of the last pick-up: the rest of the pile is under the character
-        for _ in range(self.cfg.max_loot_per_kill.value):
+    def _loot_mask(self) -> np.ndarray:
+        """Ground Items highlight (tile outlines + item names) as a pixel mask."""
+        return hue_mask(self.client.get_filtered_screenshot(), self.cfg.loot_color.value)
+
+    def _pile_points(self, mask: np.ndarray, around: tuple[int, int] | None = None,
+                     radius: int = 80) -> list[tuple[int, int]]:
+        """Where to point the mouse to find the items of one pile.
+        Ground Items draws the tile outline (a diamond) with the item names stacked just
+        above it, so the lowest purple pixels are the tile's bottom corner and the items
+        lie a little above that. Returns points from the bottom corner upwards."""
+        ys, xs = np.nonzero(mask)
+        if around is not None:
+            ax, ay = around
+            keep = (np.abs(xs - ax) <= radius) & (np.abs(ys - ay) <= radius)
+            ys, xs = ys[keep], xs[keep]
+        if len(ys) < 12:
+            return []
+        if around is None:
+            # the biggest new cluster = the new drop (ignore stray pixels)
+            m = np.zeros_like(mask, dtype=np.uint8)
+            m[ys, xs] = 1
+            m = cv2.dilate(m, np.ones((5, 5), np.uint8))
+            num, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+            if num <= 1:
+                return []
+            big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            sel = labels[ys, xs] == big
+            ys, xs = ys[sel], xs[sel]
+        ymax = int(ys.max())
+        bottom = xs[ys >= ymax - 3]
+        vx = int(np.median(bottom))
+        # how wide the outline gets going up from the corner tells the tile size
+        widths = []
+        for k in range(0, 40, 2):
+            row = xs[(ys == ymax - k) & (np.abs(xs - vx) <= 60)]
+            widths.append(int(row.max() - row.min()) if len(row) >= 2 else 0)
+        pts = []
+        for k in (4, 7, 10, 14, 18, 23, 28):
+            pts.append((vx + random.randint(-2, 2), ymax - k))
+        self.log.debug(f"Pile: bottom corner ({vx},{ymax}), outline widths going up {widths[:10]}")
+        return pts
+
+    def pick_up_loot(self, before: np.ndarray | None = None):
+        """Pick up wanted items of the monster's drop: find the drop as the purple that
+        appeared since it died, take one item, then look again around the character
+        (it now stands on the pile) for the rest."""
+        spot = None
+        for i in range(self.cfg.max_loot_per_kill.value):
             if self.terminate:
                 return
             names = self._wanted_loot()
             if not names:
                 return
-            tiles = self.find_loot()
-            if not tiles and last is not None:
-                # the character stands on the pile now and hides its outline: try the same spot
-                tiles, last = [last], None
-            if not tiles:
+            now = self._loot_mask()
+            if i == 0 and before is not None:
+                grown = cv2.dilate(before.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+                pts = self._pile_points(now & ~grown)
+                if not pts:
+                    self.log.info("No new drop seen (nothing dropped, or it fell out of view)")
+            else:
+                # after a pick-up the character stands on the pile
+                pts = self._pile_points(now, around=self._player_point(), radius=60)
+            if not pts:
                 return
-            before = self._free_slots()
-            taken = next((t for t in tiles[:3] if self._take(t, names)), None)
-            if taken is None:
+            before_slots = self._free_slots()
+            if not self._take_from_points(pts, names):
+                self.log.info("Couldn't find a wanted item on the pile")
                 return
-            last = taken
             # wait until it lands in the inventory (walk there + pick up)
             deadline = time.time() + float(self.cfg.pickup_timeout.value)
             while time.time() < deadline and not self.terminate:
                 time.sleep(random.uniform(0.4, 0.7))
-                if self._free_slots() < before:
+                if self._free_slots() < before_slots:
                     self.looted += 1
                     self.log.info(f"Picked up loot ({self.looted} so far)")
                     break
             else:
                 self.log.info("Pick-up didn't happen (someone else took it?)")
-            time.sleep(random.uniform(0.15, 0.5))
+                return
+            time.sleep(random.uniform(0.2, 0.6))
+
+    def _take_from_points(self, pts: list[tuple[int, int]], names: list[str]) -> bool:
+        """Move the mouse up the pile; left-click as soon as the mouse-over says
+        "Take <wanted item>". If a monster/other item covers it, use the right-click menu."""
+        hovers = [f"Take {n}" for n in names]
+        menu_tried = 0
+        for x, y in pts:
+            self.client.move_to((x, y), rand_move_chance=0)
+            time.sleep(random.uniform(0.1, 0.2))
+            answers = self.client.get_hover_texts()
+            if any(self.text_matches(a, w) for a in answers for w in hovers):
+                click(-1, -1)
+                return True
+            # something on top ("Attack Cow", "Take Raw beef"...): the menu lists everything here
+            if menu_tried < 2 and any(a.strip() for a in answers):
+                menu_tried += 1
+                click(-1, -1, click_type=ClickType.RIGHT)
+                time.sleep(random.uniform(0.25, 0.45))
+                if self.menu_pick(hovers):
+                    return True
+                self._close_menu()
+        # last try: the menu at the likeliest spot (items' clickboxes are small)
+        x, y = pts[min(2, len(pts) - 1)]
+        self.client.move_to((x, y), rand_move_chance=0)
+        click(-1, -1, click_type=ClickType.RIGHT)
+        time.sleep(random.uniform(0.25, 0.45))
+        if self.menu_pick(hovers):
+            return True
+        self._close_menu()
+        return False
+
+    def _close_menu(self):
+        """The game closes the right-click menu when the mouse moves away from it."""
+        x, y = self.client.mouse_position()
+        self.client.move_to((max(10, x + random.choice((-1, 1)) * random.randint(140, 200)),
+                             max(10, y + random.randint(-40, 40))), rand_move_chance=0)
 
     def _take(self, tile: MatchResult, names: list[str]) -> bool:
         """Left-click the tile if its top action is "Take <wanted item>"; otherwise (another
