@@ -74,7 +74,7 @@ class BotConfig(BotConfigMixin):
     loot_use: StringListParam = StringListParam(["Bones"])     # pick up and use at once (bury / eat)
     loot_keep: StringListParam = StringListParam(["Cowhide"])  # pick up and keep
     loot_color: RGBParam = RGBParam(170, 0, 255)  # Ground Items highlight colour (purple)
-    loot_wait: RangeParam = RangeParam(1.0, 1.8)   # after a kill, wait for the drop to appear
+    loot_wait: RangeParam = RangeParam(2.4, 3.4)   # after a kill: death animation, then the drop appears
     loot_max_distance: IntParam = IntParam(170)    # px from the character: ignore loot further away
     max_loot_per_kill: IntParam = IntParam(4)      # pick-ups to try after one kill
     pickup_timeout: FloatParam = FloatParam(8.0)   # walk there + pick up
@@ -361,8 +361,8 @@ class BotExecutor(Bot):
     def find_loot(self) -> list[MatchResult]:
         """Highlighted ground-item tiles near the character, nearest first."""
         sc = self.client.get_filtered_screenshot()
-        mask = hue_mask(sc, self.cfg.loot_color.value)
-        mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
+        raw = hue_mask(sc, self.cfg.loot_color.value)
+        mask = cv2.dilate(raw.astype(np.uint8), np.ones((3, 3), np.uint8))
         num, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         px, py = self._player_point()
         found, seen = [], []
@@ -373,6 +373,9 @@ class BotExecutor(Bot):
             seen.append((int(x), int(y), int(w), int(h), int(area), round(d)))
             # a tile is a hollow diamond outline; item names are dense, flat rows of letters
             if w < LOOT_MIN_W or h < LOOT_MIN_H or area / float(w * h) > LOOT_MAX_FILL or w > 4 * h:
+                continue
+            # ...and empty in the middle (two stacked name labels can look hollow too)
+            if raw[y + int(h * 0.35): y + int(h * 0.65), x + int(w * 0.3): x + int(w * 0.7)].any():
                 continue
             if d > self.cfg.loot_max_distance.value:
                 continue
