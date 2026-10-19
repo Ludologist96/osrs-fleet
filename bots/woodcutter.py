@@ -46,7 +46,7 @@ class BotConfig(BotConfigMixin):
     # Long break: AFK long enough to get logged out (logs back in after),
     # at most once every 90 minutes.
     long_break_cfg: BreakCfgParam = BreakCfgParam(
-        RangeParam(600, 900),  # 10-15 minutes
+        RangeParam(1800, 2700),  # 30-45 minutes, logged out
         FloatParam(0.01)
     )
 

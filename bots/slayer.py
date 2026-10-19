@@ -105,7 +105,7 @@ class BotConfig(BotConfigMixin):
     # --- breaks (like the woodcutter) ---
     break_cfg: BreakCfgParam = BreakCfgParam(RangeParam(10, 30), FloatParam(0.01))
     break_ui_browse_chance: FloatParam = FloatParam(0.5)
-    long_break_cfg: BreakCfgParam = BreakCfgParam(RangeParam(600, 900), FloatParam(0.01))
+    long_break_cfg: BreakCfgParam = BreakCfgParam(RangeParam(1800, 2700), FloatParam(0.01))
 
 
 # Opponent Information health bar (RuneLite colours, drawn at ~90% opacity).
@@ -356,10 +356,11 @@ class BotExecutor(Bot):
             tried += 1
             # aim a bit inside the hull, not at its edge
             inner = m.scale_px(-max(2, min(m.width, m.height) // 5))
+            reach_before = self._cant_reach_count()
             if not self.hover_click(inner, self.attack_hover, tries=2):
                 self.log.debug("Not attackable here")
                 continue
-            if self._wait_fight_start():
+            if self._wait_fight_start(reach_before):
                 return True
             cx, cy = m.get_center()
             self.unreachable.append((time.time(), cx, cy))
@@ -524,9 +525,20 @@ class BotExecutor(Bot):
         widening = rows[0][1] <= 6 and rows[2][1] < rows[4][1] < rows[6][1]
         if widening or (hollow and rows[0][1] <= 6):
             # diamond (camera turned): bottom corner, widens going up; items in its middle
-            for k in (4, 7, 10, 14, 18, 23, 28):
+            # the outline widens steadily up to the tile's middle row (a name label on top
+            # makes the width jump): the items lie around that row
+            kc = 1
+            for k in range(2, 50):
+                a, b = rows[k - 1][1], rows[k][1]
+                if b < a - 3 or b > a + 14:
+                    break
+                kc = k
+            cx = (rows[kc][3] + rows[kc][4]) // 2
+            for dx, dy in ((0, 0), (0, 3), (0, -3), (-6, 0), (6, 0), (0, 6)):
+                pts.append((cx + dx + random.randint(-1, 1), ymax - kc + dy))
+            for k in (4, 8, 13, 18, 24):
                 pts.append((vx + random.randint(-2, 2), ymax - k))
-            kind = "diamond tile"
+            kind = f"diamond tile, middle {kc} px up"
         elif hollow:
             # square-ish tile (camera facing along the grid): flat bottom edge; find the top edge
             w0 = rows[0][1]
@@ -793,14 +805,27 @@ class BotExecutor(Bot):
         if used:
             self.log.info(f"Used {used} item(s) ({', '.join(names)})")
 
-    def _wait_fight_start(self) -> bool:
+    def _cant_reach_count(self) -> int:
+        """How many "I can't reach that!" lines the chat box shows (fenced-off monster)."""
+        try:
+            text = self.client.get_chat_text().lower()
+        except Exception:
+            return -1
+        return text.count("reach that") + text.count("reach tha!")
+
+    def _wait_fight_start(self, reach_before: int = -1) -> bool:
         deadline = time.time() + float(self.cfg.attack_start_timeout.value)
         time.sleep(random.uniform(0.5, 0.9))
+        checks = 0
         while time.time() < deadline and not self.terminate:
             if self.fight_state() == "fighting":
                 self.log.info("Fighting")
                 return True
-            time.sleep(random.uniform(0.4, 0.8))
+            checks += 1
+            if reach_before >= 0 and checks in (1, 3) and self._cant_reach_count() > reach_before:
+                self.log.info("\"I can't reach that!\" - it's behind a fence")
+                return False
+            time.sleep(random.uniform(0.3, 0.6))
         return False
 
 

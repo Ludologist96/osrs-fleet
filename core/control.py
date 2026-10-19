@@ -31,6 +31,8 @@ class ScriptControl(metaclass=SingletonMeta):
         self.long_break_end: float = 0
         # Called (once, before the next guarded action) after a long break, e.g. to log in again.
         self.after_long_break = None
+        # Called once when a long break starts (e.g. log out), with clicks allowed.
+        self.before_long_break = None
         self._relogin_needed = False
         self._relogging = False
         self._relogin_lock = threading.RLock()
@@ -77,7 +79,19 @@ class ScriptControl(metaclass=SingletonMeta):
                 self.initialize_break(sec)
                 self.long_break_end = self.break_until
                 self._relogin_needed = True
-                self.log.info(f"Long break: going AFK for {sec // 60} min {sec % 60} s.")
+                if self.before_long_break:
+                    self.log.info(f"Long break: logging out for {sec // 60} min {sec % 60} s.")
+                    self._tls.bypass = True  # the hook's clicks must not wait for the break
+                    try:
+                        self.before_long_break()
+                    except ScriptTerminationException:
+                        raise
+                    except Exception:
+                        self.log.warning("Couldn't log out for the long break (staying AFK)", exc_info=True)
+                    finally:
+                        self._tls.bypass = False
+                else:
+                    self.log.info(f"Long break: going AFK for {sec // 60} min {sec % 60} s.")
                 return
             if now < self.break_until + self.break_cooldown_seconds:
                 return

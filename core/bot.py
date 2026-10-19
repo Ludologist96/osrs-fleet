@@ -29,6 +29,8 @@ class Bot:
         # so log in again before the bot's next action.
         self.control.long_break_config = long_break_cfg
         self.control.after_long_break = self._log_back_in
+        # ...and log out when it starts (a player who stops for half an hour logs out).
+        self.control.before_long_break = self._log_out
         # Some short breaks: look through skills/quests/equipment... tabs, then back.
         self.control.on_short_break = self._browse_tabs
         self.control.on_short_break_chance = float(break_ui_browse_chance)
@@ -59,6 +61,40 @@ class Bot:
             raise RuntimeError(f"still not in game: {result}")
         self.log.info("Back in the game")
         self._open_inventory()
+
+    def _log_out(self):
+        """Logout tab -> the red "Click here to logout" button. Verified by the game view
+        disappearing (login screen)."""
+        import random
+        import time
+        import numpy as np
+        import cv2
+        from core import login
+        from core.osrs_client import ToolplaneTab
+        from core.region_match import MatchResult
+        for attempt in range(3):
+            self.client.click_toolplane(ToolplaneTab.LOGOUT)
+            time.sleep(random.uniform(0.6, 1.2))
+            sc = self.client.get_screenshot()
+            tp = self.client.sectors.toolplane
+            arr = np.asarray(tp.crop_in(sc).convert("RGB"), dtype=np.int16)
+            r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+            red = ((r >= 110) & (g <= 60) & (b <= 60) & (r - g >= 70)).astype(np.uint8)
+            num, _, stats, _ = cv2.connectedComponentsWithStats(red, connectivity=8)
+            if num <= 1 or stats[1:, cv2.CC_STAT_AREA].max() < 800:
+                self.log.warning("Logout button not found")
+                continue
+            i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            x, y, w, h = (int(v) for v in stats[i][:4])
+            button = MatchResult(tp.start_x + x + 8, tp.start_y + y + 5,
+                                 tp.start_x + x + w - 8, tp.start_y + y + h - 5)
+            self.client.click(button.get_point_within())
+            for _ in range(10):
+                time.sleep(1)
+                if login.state().get("state") != "game":
+                    self.log.info("Logged out")
+                    return
+        raise RuntimeError("couldn't log out")
 
     def _open_inventory(self):
         from core.osrs_client import ToolplaneTab
