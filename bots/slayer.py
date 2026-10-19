@@ -508,24 +508,40 @@ class BotExecutor(Bot):
         ymax = int(ys.max())
         bottom = xs[ys >= ymax - 3]
         vx = int(np.median(bottom))
-        # how wide the outline gets going up from the corner tells the tile size
-        widths = []
-        for k in range(0, 40, 2):
-            row = xs[(ys == ymax - k) & (np.abs(xs - vx) <= 60)]
-            widths.append(int(row.max() - row.min()) if len(row) >= 2 else 0)
+        # per row going up from the lowest purple: width and how full the row is
+        rows = []
+        for k in range(0, 70):
+            row = xs[(ys == ymax - k) & (np.abs(xs - vx) <= 70)]
+            if len(row) >= 2:
+                ext = int(row.max() - row.min()) + 1
+                rows.append((k, ext, len(row) / ext, int(row.min()), int(row.max())))
+            else:
+                rows.append((k, 0, 0.0, vx, vx))
+        widths = [r[1] for r in rows[:20:2]]
+        mid = [r[2] for r in rows[3:10] if r[1] > 0]
+        hollow = bool(mid) and sum(mid) / len(mid) < 0.4  # tile outline: only its 2 sides
         pts = []
-        if widths[0] <= 6:
-            # a purple tile outline: starts as a point (its bottom corner), widens going up
+        if hollow and rows[0][1] <= 6:
+            # diamond (camera turned): bottom corner, widens going up; items in its middle
             for k in (4, 7, 10, 14, 18, 23, 28):
                 pts.append((vx + random.randint(-2, 2), ymax - k))
-            kind = "tile"
+            kind = "diamond tile"
+        elif hollow:
+            # square-ish tile (camera facing along the grid): flat bottom edge; find the top edge
+            w0 = rows[0][1]
+            cx = (rows[0][3] + rows[0][4]) // 2
+            top = next((k for k, ext, fill, _, _ in rows[4:] if fill > 0.6 and ext >= 0.6 * w0), None)
+            h = top if top else int(w0 * 0.6)
+            cy = ymax - h // 2
+            for dx, dy in ((0, 0), (0, -3), (0, 3), (-5, 0), (5, 0), (0, -6), (0, 6)):
+                pts.append((cx + dx + random.randint(-1, 1), cy + dy))
+            kind = f"square tile h={h}"
         else:
-            # only an item name is purple (the tile takes the colour of a pricier, unwanted
-            # item on the pile): the item lies about level with the bottom of its name
+            # only an item name is purple: the item lies about level with the bottom of its name
             for k, dx in ((2, 0), (5, 0), (-2, 0), (8, 0), (3, -7), (3, 7), (11, 0)):
                 pts.append((vx + dx + random.randint(-2, 2), ymax + k))
             kind = "name label"
-        self.log.debug(f"Pile ({kind}): lowest purple ({vx},{ymax}), widths going up {widths[:10]}")
+        self.log.debug(f"Pile ({kind}): lowest purple ({vx},{ymax}), widths going up {widths}")
         return pts
 
     def pick_up_loot(self, before: np.ndarray | None = None):
