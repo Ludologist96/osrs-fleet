@@ -84,6 +84,57 @@ def set_login_world(n: int, world: int) -> int:
                                "runelite.defaultworldplugin": "true"})
 
 
+def _argb(rgb) -> str:
+    r, g, b = (int(c) for c in rgb)
+    v = (0xFF << 24) | (r << 16) | (g << 8) | b
+    return str(v - (1 << 32))  # Java int (signed)
+
+
+def read_rl_settings(n: int) -> dict:
+    """Slot N's RuneLite settings (main profile, not the per-account files)."""
+    out = {}
+    for f in glob.glob(f"/home/bot{n}/.runelite/profiles2/*.properties"):
+        if "$rsprofile" in os.path.basename(f):
+            continue
+        for line in Path(f).read_text(errors="replace").splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    return out
+
+
+def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
+    """RuneLite settings a bot needs, made from its saved config (so its targets/loot
+    are set in one place: the bot's settings)."""
+    if bot != "slayer":
+        return {}
+    val = lambda k, d=None: (cfg.get(k) or {}).get("value", d)
+    want = {"runelite.npcindicatorsplugin": "true", "runelite.opponentinfoplugin": "true",
+            "npcindicators.highlightHull": "true", "npcindicators.ignoreDeadNpcs": "true",
+            "opponentinfo.showOpponentHealthOverlay": "true"}
+    targets = val("targets") or []
+    if targets:
+        want["npcindicators.npcToHighlight"] = ", ".join(targets)
+    colors = val("npc_colors") or []
+    if colors:
+        want["npcindicators.npcColor"] = _argb(colors[0]["value"]["rgb"])
+    if val("loot", True):
+        loot = list(val("loot_use") or []) + list(val("loot_keep") or [])
+        hidden = [h.strip() for h in current.get("grounditems.hiddenItems", "").split(",") if h.strip()]
+        lower = {x.lower() for x in loot}
+        want.update({
+            "runelite.grounditemsplugin": "true",
+            "grounditems.highlightedItems": ", ".join(loot),
+            "grounditems.hiddenItems": ", ".join(h for h in hidden if h.lower() not in lower),
+            "grounditems.highlightTiles": "true",
+            "grounditems.ownershipFilterMode": "TAKEABLE",
+        })
+        lc = val("loot_color")
+        if lc:
+            want["grounditems.highlightedColor"] = _argb(lc["rgb"])
+    return want
+
+
 SCREEN_W, SCREEN_H = 1280, 800
 
 
@@ -297,15 +348,27 @@ class Launcher:
                     break
                 except Exception:
                     time.sleep(3)
-            # 3. not in game yet: open RuneLite on a random F2P world, then log in
+            # RuneLite settings this bot needs (e.g. slayer: which monsters/loot to highlight)
+            rl_change = {}
+            if bot != FREEROAM:
+                try:
+                    bcfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")
+                    cur = read_rl_settings(n)
+                    rl_change = {k: v for k, v in bot_rl_settings(bot, bcfg, cur).items() if cur.get(k) != v}
+                except Exception as e:
+                    self._set(n, msg=f"couldn't read the bot's settings ({e})")
+            # 3. not in game yet (or RuneLite settings to change): restart RuneLite on a
+            #    random F2P world, then log in
             st = _http("GET", f"{_app(n)}/api/session/state", timeout=20)
-            if st.get("state") != "game":
+            if st.get("state") != "game" or rl_change:
                 world = random.choice(f2p_worlds())
                 self._set(n, msg=f"switching to world {world}", world=world)
                 subprocess.run(["systemctl", "stop", f"osrs-client@{n}.service"], capture_output=True)
                 changed = set_login_world(n, world)
                 if not changed:
                     raise RuntimeError("RuneLite settings not found for this slot")
+                if rl_change:
+                    set_rl_settings(n, rl_change, all_profiles=False)
                 subprocess.run(["systemctl", "start", f"osrs-client@{n}.service"], capture_output=True)
                 time.sleep(5)
                 for _ in range(60):
