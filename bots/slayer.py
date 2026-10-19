@@ -379,7 +379,8 @@ class BotExecutor(Bot):
             found.append((d, MatchResult(int(x), int(y), int(x + w), int(y + h))))
         found.sort(key=lambda t: t[0])
         self.log.debug(f"Loot tiles: {len(found)} usable of {num - 1} purple blobs (player at {px},{py}); "
-                       f"blobs x,y,w,h,area,dist: {seen[:8]}")
+                       f"usable x,y,w,h: {[m.bounding_box for _, m in found[:5]]}; "
+                       f"big blobs x,y,w,h,area,dist: {[b for b in seen if b[2] >= 10 and b[3] >= 9][:10]}")
         return [m for _, m in found]
 
     def _wanted_loot(self) -> list[str]:
