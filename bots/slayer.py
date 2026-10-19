@@ -514,9 +514,18 @@ class BotExecutor(Bot):
             row = xs[(ys == ymax - k) & (np.abs(xs - vx) <= 60)]
             widths.append(int(row.max() - row.min()) if len(row) >= 2 else 0)
         pts = []
-        for k in (4, 7, 10, 14, 18, 23, 28):
-            pts.append((vx + random.randint(-2, 2), ymax - k))
-        self.log.debug(f"Pile: bottom corner ({vx},{ymax}), outline widths going up {widths[:10]}")
+        if widths[0] <= 6:
+            # a purple tile outline: starts as a point (its bottom corner), widens going up
+            for k in (4, 7, 10, 14, 18, 23, 28):
+                pts.append((vx + random.randint(-2, 2), ymax - k))
+            kind = "tile"
+        else:
+            # only an item name is purple (the tile takes the colour of a pricier, unwanted
+            # item on the pile): the item lies about level with the bottom of its name
+            for k, dx in ((2, 0), (5, 0), (-2, 0), (8, 0), (3, -7), (3, 7), (11, 0)):
+                pts.append((vx + dx + random.randint(-2, 2), ymax + k))
+            kind = "name label"
+        self.log.debug(f"Pile ({kind}): lowest purple ({vx},{ymax}), widths going up {widths[:10]}")
         return pts
 
     def pick_up_loot(self, before: np.ndarray | None = None):
