@@ -590,9 +590,11 @@ class BotExecutor(Bot):
         if not text:
             return False
         verb, _, name = wanted.lower().partition(" ")
-        if tools.text_similarity(text, verb) < HOVER_SIM:
+        if verb != "*" and tools.text_similarity(text, verb) < HOVER_SIM:
             return False
         rest = text.split(" ", 1)[1] if " " in text else text
+        if verb == "*":
+            rest = text  # any verb: look for the name anywhere
         if len(name) <= 4:
             return name in rest
         from difflib import SequenceMatcher
@@ -662,9 +664,11 @@ class BotExecutor(Bot):
                 self.log.debug(f"No {names} in the inventory")
                 return
             m = items[0]
-            # mouse-over of an inventory item: "Bury Bones", "Eat Trout"...
-            wanted = [f"{v} {n}" for n in names for v in ("Bury", "Eat", "Drink", "Use")]
-            if not self.hover_click(m.scale_px(-6), wanted, tries=2):
+            # mouse-over of an inventory item: "Bury Bones", "Eat Trout"... The item's
+            # left-click action is what we want, so only the item name has to match
+            # (OCR often garbles the verb: "84Xy Bones").
+            wanted = [f"* {n}" for n in names]
+            if not self.hover_click(m.scale_px(-6), wanted, tries=3):
                 self.log.debug("Inventory item's mouse-over didn't match; not using it")
                 return
             self.log.info("Used an item")
