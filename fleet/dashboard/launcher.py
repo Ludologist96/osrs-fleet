@@ -128,6 +128,9 @@ def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
             "grounditems.hiddenItems": ", ".join(h for h in hidden if h.lower() not in lower),
             "grounditems.highlightTiles": "true",
             "grounditems.ownershipFilterMode": "TAKEABLE",
+            # only the wanted items are drawn: otherwise a pile's tile outline takes the colour
+            # of a pricier unwanted item on it (cowhide) and the bones only show as a name
+            "grounditems.showHighlightedOnly": "true",
         })
         lc = val("loot_color")
         if lc:
