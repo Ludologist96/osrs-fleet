@@ -56,6 +56,7 @@ cmd_update() {
     install -d -m 2775 -o root -g osrs /var/lib/osrs/cache   # shared item icon cache
     install -m 755 "$src/fleet/linux/slot" /opt/osrs/bin/slot
     install -m 755 "$src/fleet/linux/fleetctl" /opt/osrs/bin/fleetctl
+    install -m 755 "$src/fleet/linux/osrs-proxy" /opt/osrs/bin/osrs-proxy
     new_sha=$(sha256sum "$APP_DIR/requirements.txt" | cut -d' ' -f1)
     if [ "$new_sha" != "$(cat /opt/osrs/.requirements.sha 2>/dev/null)" ]; then
         echo "requirements.txt changed - updating Python packages"
@@ -75,10 +76,17 @@ cmd_update() {
     systemctl restart osrs-websockify.service || true
     echo "Restarting bot apps and dashboard (RuneLite clients keep running)"
     for n in $(seq 1 "$SLOTS"); do systemctl restart "osrs-app@$n.service"; done
+    systemctl enable osrs-proxy-rules.service >/dev/null 2>&1 || true
+    systemctl start osrs-proxy-rules.service || true
     systemctl enable osrs-telegram.service >/dev/null 2>&1 || true
     systemctl restart osrs-telegram.service || true
     systemctl restart osrs-dashboard.service
     echo "Updated."
+}
+
+cmd_proxy() {   # set N URL | off N | show [N] | test N | apply
+    need_root proxy "$@"
+    exec /opt/osrs/bin/osrs-proxy "$@"
 }
 
 cmd_creds() {   # slot [file]
@@ -195,6 +203,8 @@ fleetctl - manage the OSRS fleet ($SLOTS slots)
   fleetctl update                       copy new code from Windows and restart bot apps,
                                         dashboard and Telegram bot
   fleetctl creds <N> [file]             give slot N the Jagex login saved by RuneLite
+  fleetctl proxy set <N> <url>          slot N goes out through its own proxy (socks5://login:pass@host:port)
+  fleetctl proxy off <N> | show | test <N>   home IP again / list / which IP the slot has
                                         on Windows (credentials.properties)
   fleetctl copy-settings <from> <to|all>
                                         copy RuneLite plugins/settings between slots
@@ -212,6 +222,7 @@ case "${1:-help}" in
     start|stop|restart) a=$1; shift; cmd_unit_action "$a" "$@" ;;
     update) cmd_update ;;
     creds) shift; cmd_creds "$@" ;;
+    proxy) shift; cmd_proxy "$@" ;;
     copy-settings) shift; cmd_copy_settings "$@" ;;
     logs) shift; cmd_logs "$@" ;;
     slots) shift; cmd_slots "$@" ;;

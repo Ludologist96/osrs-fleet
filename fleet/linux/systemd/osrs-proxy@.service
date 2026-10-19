@@ -1,0 +1,12 @@
+[Unit]
+Description=OSRS slot %i - residential proxy (redsocks)
+ConditionPathExists=/etc/osrs/proxy/slot%i.redsocks.conf
+After=network-online.target osrs-proxy-rules.service
+
+[Service]
+ExecStart=/usr/sbin/redsocks -c /etc/osrs/proxy/slot%i.redsocks.conf
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

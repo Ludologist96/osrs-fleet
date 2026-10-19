@@ -80,6 +80,7 @@ find "$APP_DIR" -type d -exec chmod g+s {} +
 
 install -m 755 "$HERE/slot" /opt/osrs/bin/slot
 install -m 755 "$HERE/fleetctl" /opt/osrs/bin/fleetctl
+install -m 755 "$HERE/osrs-proxy" /opt/osrs/bin/osrs-proxy
 ln -sf /opt/osrs/bin/fleetctl /usr/local/bin/fleetctl
 
 # ---------------------------------------------------------------- python
@@ -116,6 +117,7 @@ for n in $(seq 1 "$SLOTS"); do echo "slot$n: 127.0.0.1:$((5900 + n))"; done > /e
 systemctl enable --now osrs-dashboard.service >/dev/null
 systemctl enable --now osrs-websockify.service >/dev/null
 systemctl enable --now osrs-telegram.service >/dev/null
+systemctl enable --now osrs-proxy-rules.service >/dev/null || true
 for n in $(seq 1 "$SLOTS"); do
     systemctl enable "osrs-slot@$n.target" >/dev/null 2>&1
     systemctl start "osrs-slot@$n.target"

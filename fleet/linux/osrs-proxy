@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""Per-slot residential proxy for the OSRS fleet (run as root, via `fleetctl proxy`).
+
+Every slot whose proxy is on sends ALL its TCP traffic (RuneLite launcher, game,
+bot app) through its own redsocks, which forwards it to the proxy provider.
+A kill switch blocks every other way out for that slot's Linux user (botN),
+so if the proxy is down the slot has no internet - it never falls back to the
+home IP.
+
+    osrs-proxy set N URL     URL = socks5://login:password@host:port  (or http://...)
+    osrs-proxy off N         back to the home IP
+    osrs-proxy show [N]      JSON: which slots use a proxy (no passwords)
+    osrs-proxy test N        JSON: the IP (and country) the internet sees for slot N
+    osrs-proxy apply         rebuild redsocks configs + firewall rules (boot / after changes)
+
+Files: /etc/osrs/proxy/slotN.url (root only, has the password),
+       /etc/osrs/proxy/slotN.redsocks.conf (root only), /etc/osrs/proxy/slotN.on (marker)
+"""
+import json
+import os
+import pwd
+import socket
+import subprocess
+import sys
+from urllib.parse import unquote, urlsplit
+
+DIR = "/etc/osrs/proxy"
+BASE_PORT = 12000          # slot N's redsocks listens on 127.0.0.1:(12000+N)
+CHAIN = "OSRS_PROXY"
+
+
+def die(msg: str, code: int = 1):
+    print(json.dumps({"ok": False, "error": msg}))
+    sys.exit(code)
+
+
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if check and res.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd)}: {res.stderr.strip() or res.stdout.strip()}")
+    return res
+
+
+def url_path(n: int) -> str:
+    return f"{DIR}/slot{n}.url"
+
+
+def parse(url: str) -> dict:
+    u = urlsplit(url.strip())
+    scheme = {"socks5": "socks5", "socks5h": "socks5", "http": "http-connect",
+              "https": "http-connect"}.get(u.scheme.lower())
+    if not scheme:
+        raise ValueError("use socks5://login:password@host:port (or http://...)")
+    if not u.hostname or not u.port:
+        raise ValueError("host and port are required")
+    login, password = unquote(u.username or ""), unquote(u.password or "")
+    for v in (login, password):
+        if any(c in v for c in '"\\\n'):
+            raise ValueError('login/password must not contain " or \\')
+    return {"type": scheme, "host": u.hostname, "port": u.port, "login": login, "password": password}
+
+
+def resolve(host: str) -> str:
+    infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    if not infos:
+        raise RuntimeError(f"can't resolve {host}")
+    return infos[0][4][0]
+
+
+def slots_with_proxy() -> list[int]:
+    out = []
+    if os.path.isdir(DIR):
+        for f in os.listdir(DIR):
+            if f.startswith("slot") and f.endswith(".url"):
+                try:
+                    out.append(int(f[4:-4]))
+                except ValueError:
+                    pass
+    return sorted(out)
+
+
+def ensure_redsocks():
+    if os.path.exists("/usr/sbin/redsocks"):
+        return
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    subprocess.run(["apt-get", "update", "-qq"], env=env, capture_output=True)
+    res = subprocess.run(["apt-get", "install", "-y", "-qq", "redsocks", "iptables"],
+                         env=env, capture_output=True, text=True)
+    if res.returncode != 0 or not os.path.exists("/usr/sbin/redsocks"):
+        raise RuntimeError("could not install redsocks: " + res.stderr.strip()[-300:])
+    # Debian's own redsocks service is not used (we run one per slot).
+    subprocess.run(["systemctl", "disable", "--now", "redsocks.service"], capture_output=True)
+
+
+def write_redsocks_conf(n: int, p: dict, ip: str):
+    conf = f"""base {{
+    log_debug = off;
+    log_info = on;
+    log = "syslog:daemon";
+    daemon = off;
+    redirector = iptables;
+    user = redsocks;
+    group = redsocks;
+}}
+redsocks {{
+    local_ip = 127.0.0.1;
+    local_port = {BASE_PORT + n};
+    ip = {ip};
+    port = {p['port']};
+    type = {p['type']};
+"""
+    if p["login"]:
+        conf += f'    login = "{p["login"]}";\n    password = "{p["password"]}";\n'
+    conf += "}\n"
+    path = f"{DIR}/slot{n}.redsocks.conf"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(conf)
+
+
+def ipt(*args: str, v6: bool = False, check: bool = True):
+    return run(["ip6tables" if v6 else "iptables", "-w", *args], check=check)
+
+
+def build_rules(slots_ips: dict[int, str]):
+    """Rebuild our chains from scratch. Order in filter: allow loopback (redsocks),
+    allow DNS, reject everything else - for each proxied slot user."""
+    for table in ("nat", "filter"):
+        if ipt("-t", table, "-n", "-L", CHAIN, check=False).returncode != 0:
+            ipt("-t", table, "-N", CHAIN)
+        ipt("-t", table, "-F", CHAIN)
+        if ipt("-t", table, "-C", "OUTPUT", "-j", CHAIN, check=False).returncode != 0:
+            ipt("-t", table, "-I", "OUTPUT", "1", "-j", CHAIN)
+    have6 = ipt("-n", "-L", check=False, v6=True).returncode == 0
+    if have6:
+        if ipt("-n", "-L", CHAIN, check=False, v6=True).returncode != 0:
+            ipt("-N", CHAIN, v6=True)
+        ipt("-F", CHAIN, v6=True)
+        if ipt("-C", "OUTPUT", "-j", CHAIN, check=False, v6=True).returncode != 0:
+            ipt("-I", "OUTPUT", "1", "-j", CHAIN, v6=True)
+
+    for n in slots_ips:
+        try:
+            uid = str(pwd.getpwnam(f"bot{n}").pw_uid)
+        except KeyError:
+            continue
+        own = ["-m", "owner", "--uid-owner", uid]
+        # every TCP connection that isn't local goes to this slot's redsocks
+        ipt("-t", "nat", "-A", CHAIN, *own, "-p", "tcp", "!", "-d", "127.0.0.0/8",
+            "-j", "REDIRECT", "--to-ports", str(BASE_PORT + n))
+        # kill switch: only loopback (= redsocks) and DNS lookups may leave
+        ipt("-A", CHAIN, *own, "-d", "127.0.0.0/8", "-j", "RETURN")
+        ipt("-A", CHAIN, *own, "-p", "udp", "--dport", "53", "-j", "RETURN")
+        ipt("-A", CHAIN, *own, "-j", "REJECT")
+        if have6:
+            ipt("-A", CHAIN, *own, "-d", "::1/128", "-j", "RETURN", v6=True)
+            ipt("-A", CHAIN, *own, "-j", "REJECT", v6=True)
+
+
+def apply() -> dict:
+    os.makedirs(DIR, mode=0o755, exist_ok=True)
+    slots = slots_with_proxy()
+    ips, errors = {}, {}
+    if slots:
+        ensure_redsocks()
+    for n in slots:
+        try:
+            p = parse(open(url_path(n)).read())
+            ip = resolve(p["host"])
+            write_redsocks_conf(n, p, ip)
+            ips[n] = ip
+        except Exception as e:  # keep the kill switch even if this slot's config is bad
+            errors[n] = str(e)
+            ips[n] = ""
+        open(f"{DIR}/slot{n}.on", "w").close()
+    # markers of slots that no longer have a proxy
+    for f in os.listdir(DIR):
+        if f.endswith(".on") and int(f[4:-3]) not in ips:
+            os.remove(f"{DIR}/{f}")
+    build_rules(ips)
+    os.makedirs("/run/osrs", exist_ok=True)
+    open("/run/osrs/proxy-rules.ok", "w").close()
+    for n in slots:
+        if n in errors:
+            run(["systemctl", "stop", f"osrs-proxy@{n}.service"], check=False)
+        else:
+            run(["systemctl", "restart", f"osrs-proxy@{n}.service"], check=False)
+    # stop redsocks of slots that were switched off
+    res = run(["systemctl", "list-units", "--plain", "--no-legend", "osrs-proxy@*"], check=False)
+    for line in res.stdout.splitlines():
+        unit = line.split()[0] if line.split() else ""
+        if unit.startswith("osrs-proxy@"):
+            try:
+                n = int(unit.split("@")[1].split(".")[0])
+            except ValueError:
+                continue
+            if n not in ips:
+                run(["systemctl", "stop", unit], check=False)
+    return {"ok": not errors, "slots": slots, "errors": errors}
+
+
+def show(n: int | None = None) -> dict:
+    out = {}
+    for s in slots_with_proxy():
+        if n is not None and s != n:
+            continue
+        try:
+            p = parse(open(url_path(s)).read())
+            active = run(["systemctl", "is-active", f"osrs-proxy@{s}.service"], check=False).stdout.strip()
+            out[s] = {"on": True, "type": p["type"], "host": p["host"], "port": p["port"],
+                      "login": p["login"], "running": active == "active"}
+        except Exception as e:
+            out[s] = {"on": True, "error": str(e)}
+    if n is not None:
+        return {"ok": True, "slot": n, **out.get(n, {"on": False})}
+    return {"ok": True, "slots": out}
+
+
+def test(n: int) -> dict:
+    """What IP does the internet see for slot N (and for the PC itself)?"""
+    def get(user: str | None) -> dict:
+        cmd = ["curl", "-sS", "--max-time", "20", "https://ipinfo.io/json"]
+        if user:
+            cmd = ["runuser", "-u", user, "--", *cmd]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            j = json.loads(res.stdout)
+            return {k: j.get(k, "") for k in ("ip", "country", "city", "org")}
+        except json.JSONDecodeError:
+            return {"error": (res.stderr or res.stdout).strip()[-200:] or "no answer"}
+    slot, home = get(f"bot{n}"), get(None)
+    on = os.path.exists(url_path(n))
+    ok = bool(slot.get("ip")) and (not on or slot.get("ip") != home.get("ip"))
+    return {"ok": ok, "slot": n, "proxy_on": on, "slot_ip": slot, "home_ip": home}
+
+
+def main():
+    if os.geteuid() != 0:
+        die("run as root (sudo fleetctl proxy ...)")
+    a = sys.argv[1:]
+    try:
+        if a[:1] == ["set"] and len(a) == 3:
+            n = int(a[1])
+            parse(a[2])  # validate before saving
+            os.makedirs(DIR, mode=0o755, exist_ok=True)
+            fd = os.open(url_path(n), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(a[2].strip() + "\n")
+            r = apply()
+        elif a[:1] == ["off"] and len(a) == 2:
+            n = int(a[1])
+            for f in (url_path(n), f"{DIR}/slot{n}.redsocks.conf"):
+                if os.path.exists(f):
+                    os.remove(f)
+            r = apply()
+        elif a[:1] == ["show"]:
+            r = show(int(a[1]) if len(a) > 1 else None)
+        elif a[:1] == ["test"] and len(a) == 2:
+            r = test(int(a[1]))
+        elif a == ["apply"]:
+            r = apply()
+        else:
+            print(__doc__)
+            sys.exit(2)
+    except (ValueError, RuntimeError, OSError) as e:
+        die(str(e))
+    print(json.dumps(r))
+    sys.exit(0 if r.get("ok") else 1)
+
+
+if __name__ == "__main__":
+    main()

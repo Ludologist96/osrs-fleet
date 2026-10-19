@@ -2,7 +2,8 @@
 Description=OSRS slot %i - RuneLite
 PartOf=osrs-slot@%i.target
 BindsTo=osrs-xvfb@%i.service
-After=osrs-wm@%i.service
+After=osrs-wm@%i.service osrs-proxy-rules.service osrs-proxy@%i.service
+Wants=osrs-proxy-rules.service osrs-proxy@%i.service
 
 [Service]
 User=bot%i

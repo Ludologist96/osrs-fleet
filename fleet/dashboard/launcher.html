@@ -35,6 +35,14 @@
   .acct.off { opacity: .45; cursor: not-allowed; }
   .acct .cl { padding: 0 6px; font-size: 11px; opacity: 1; }
   .acct.off:has(.cl) { opacity: 1; }
+  .acct .px { padding: 0 6px; font-size: 11px; }
+  .acct .px.on { color: var(--accent); border-color: var(--accent); }
+  dialog#pxd { border: 1px solid var(--line); border-radius: 8px; padding: 14px; max-width: 360px; width: calc(100% - 32px);
+    background: var(--bg, #111); color: inherit; }
+  dialog#pxd label { display: block; margin: 6px 0; font-size: 13px; }
+  dialog#pxd input, dialog#pxd select { width: 100%; box-sizing: border-box; margin-top: 2px; }
+  dialog#pxd .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  dialog#pxd pre { white-space: pre-wrap; font-size: 12px; margin: 8px 0 0; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 7px; }
   label.f { display: flex; align-items: center; gap: 6px; }
   select, input[type=number] { font: inherit; padding: 3px 6px; border-radius: 6px;
@@ -98,6 +106,22 @@
 </div>
 <div id="grid"><div id="empty">Start bots above — their screens show here.</div></div>
 
+<dialog id="pxd">
+  <b id="pxt">Proxy</b>
+  <div class="small" id="pxnow"></div>
+  <label>Type <select id="pxs"><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select></label>
+  <label>Host <input id="pxh" placeholder="gw.dataimpulse.com" autocomplete="off"></label>
+  <label>Port <input id="pxp" type="number" min="1" max="65535" placeholder="10009"></label>
+  <label>Login <input id="pxl" autocomplete="off" placeholder="login (DataImpulse: add __cr.de for Germany)"></label>
+  <label>Password <input id="pxw" type="password" autocomplete="new-password"></label>
+  <div class="btns">
+    <button class="primary" id="pxsave">Save + restart RuneLite</button>
+    <button id="pxtest">Test IP</button>
+    <button id="pxoff">Turn off</button>
+    <button id="pxclose">Close</button>
+  </div>
+  <pre id="pxout"></pre>
+</dialog>
 <script type="module">
 import RFB from '/novnc/core/rfb.js';
 
@@ -136,6 +160,10 @@ async function loadAccounts() {
         catch (err) { b.textContent = 'failed'; $('err').textContent = err.message; } };
       el.appendChild(b);
     }
+    const pb = document.createElement('button'); pb.className = 'px' + (sl.proxy ? ' on' : '');
+    pb.textContent = sl.proxy ? 'proxy ✓' : 'proxy'; pb.title = sl.proxy ? 'This slot uses its own proxy' : 'This slot uses the home IP';
+    pb.onclick = (e) => { e.preventDefault(); openProxy(sl.slot); };
+    el.appendChild(pb);
     box.appendChild(el);
   }
   const sel = $('bot'); if (!sel.options.length) {
@@ -145,6 +173,44 @@ async function loadAccounts() {
   }
   for (const n of shown) if (tiles[n]) tiles[n].lbl.textContent = `${n} · ${names[n] || ''}`;
 }
+
+// ------------------------------------------------------------- per-slot proxy
+let pxSlot = 0;
+async function openProxy(n) {
+  pxSlot = n; $('pxt').textContent = `Proxy - slot ${n}`; $('pxout').textContent = ''; $('pxw').value = '';
+  $('pxd').showModal();
+  try { const r = await api(`/api/slot/${n}/proxy`);
+    if (r.on) { $('pxnow').textContent = `On: ${r.host}:${r.port}` + (r.running === false ? ' (proxy not running!)' : '');
+      $('pxh').value = r.host || ''; $('pxp').value = r.port || ''; $('pxl').value = r.login || '';
+      $('pxs').value = r.type === 'http-connect' ? 'http' : 'socks5'; }
+    else { $('pxnow').textContent = 'Off - this slot uses the home IP.'; if (!$('pxp').value) $('pxp').value = 10000 + n; }
+  } catch (e) { $('pxnow').textContent = e.message; }
+}
+$('pxclose').onclick = () => { $('pxd').close(); refresh(); };
+$('pxsave').onclick = async () => {
+  const h = $('pxh').value.trim(), p = $('pxp').value.trim(), l = $('pxl').value.trim(), w = $('pxw').value;
+  if (!h || !p) { $('pxout').textContent = 'Host and port are needed.'; return; }
+  if (l && !w) { $('pxout').textContent = 'Type the password too.'; return; }
+  const auth = l ? `${encodeURIComponent(l)}:${encodeURIComponent(w)}@` : '';
+  $('pxout').textContent = 'Saving (the first time it installs a small program, ~1 min)…';
+  try { const r = await api(`/api/slot/${pxSlot}/proxy`, { url: `${$('pxs').value}://${auth}${h}:${p}` });
+    $('pxw').value = '';
+    $('pxout').textContent = r.ok ? 'Saved. RuneLite is restarting. Press "Test IP" to check.' : ('Failed: ' + (r.error || JSON.stringify(r.errors)));
+  } catch (e) { $('pxout').textContent = 'Failed: ' + e.message; }
+};
+$('pxoff').onclick = async () => {
+  if (!confirm(`Slot ${pxSlot} will use the HOME IP again. Continue?`)) return;
+  try { const r = await api(`/api/slot/${pxSlot}/proxy`, { off: true }); $('pxout').textContent = r.ok ? 'Off - home IP. RuneLite is restarting.' : ('Failed: ' + r.error); }
+  catch (e) { $('pxout').textContent = 'Failed: ' + e.message; }
+};
+$('pxtest').onclick = async () => {
+  $('pxout').textContent = 'Checking…';
+  try { const r = await api(`/api/slot/${pxSlot}/proxy-test`, {});
+    const f = (x) => x.ip ? `${x.ip}  ${x.country} ${x.city}  ${x.org}` : (x.error || '?');
+    $('pxout').textContent = `Slot ${pxSlot}: ${f(r.slot_ip)}\nHome:   ${f(r.home_ip)}\n` +
+      (r.ok ? (r.proxy_on ? 'OK - the slot has a different IP.' : 'Proxy is off - same as home.') : 'PROBLEM - no connection or same IP as home.');
+  } catch (e) { $('pxout').textContent = 'Failed: ' + e.message; }
+};
 
 async function loadRuns() {
   const st = await api('/api/launch'); runs = st.runs; const box = $('runs'); box.innerHTML = '';

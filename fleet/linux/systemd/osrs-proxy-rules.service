@@ -1,0 +1,13 @@
+[Unit]
+Description=OSRS fleet - proxy firewall rules (kill switch) for proxied slots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Retry a few times: right after boot DNS may not work yet.
+ExecStart=/bin/sh -c 'for i in 1 2 3 4 5 6; do /opt/osrs/bin/osrs-proxy apply && touch /run/osrs/proxy-rules.ok && exit 0; sleep 10; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target

@@ -42,6 +42,16 @@ case "$comp" in
     client)
         wait_display
         cd "$HOME"
+        # Slot with its own proxy: never start RuneLite before the kill switch and
+        # the slot's proxy are up (otherwise it could connect from the home IP).
+        if [ -e "/etc/osrs/proxy/slot$n.on" ]; then
+            for _ in $(seq 1 120); do
+                [ -e /run/osrs/proxy-rules.ok ] && \
+                    (exec 3<>"/dev/tcp/127.0.0.1/$((12000 + n))") 2>/dev/null && break
+                sleep 1
+            done
+            [ -e /run/osrs/proxy-rules.ok ] || { echo "proxy rules not in place - not starting" >&2; exit 1; }
+        fi
         # Start RuneLites one at a time, a little apart. When all 8 launchers
         # download the client at once, repo.runelite.net answers HTTP 429
         # (rate limited) and RuneLite stops with "fatal error".

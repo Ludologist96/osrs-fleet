@@ -260,3 +260,18 @@ then `sudo systemctl disable osrs-slot@<n>.target` for each of them.
   on the login screen.
 - `core/osrs_client.py`: hover text on Linux reads both sources one after
   the other (it used to read only one).
+
+## Own proxy per slot
+
+Each slot can go out through its own (residential / ISP) proxy instead of the home IP.
+Launcher page -> the **proxy** button next to an account -> host, port, login, password ->
+**Save** (RuneLite restarts) -> **Test IP** shows the slot's IP next to the home IP.
+Same from the VM: `sudo fleetctl proxy set 9 socks5://login:pass@host:port`,
+`fleetctl proxy test 9`, `fleetctl proxy off 9`.
+
+How it works: slot N's Linux user (botN) has all its TCP redirected by iptables to its own
+redsocks (`osrs-proxy@N`, port 12000+N), which forwards to the proxy. A kill switch rejects
+everything else that user sends (except DNS), so if the proxy is down the slot has no internet
+instead of falling back to the home IP. RuneLite on a proxied slot only starts once those rules
+and the slot's redsocks are up (`osrs-proxy-rules.service` rebuilds them at boot).
+The password is kept in `/etc/osrs/proxy/slotN.url` (root only), never in the repo.

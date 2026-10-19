@@ -119,6 +119,7 @@ def slot_info(n: int) -> dict:
         "bot": bot_status(n),
         "ui_port": 8010 + n,
         "vnc_port": 5900 + n,
+        "proxy": os.path.exists(f"/etc/osrs/proxy/slot{n}.on"),
     }
 
 
@@ -179,6 +180,16 @@ def start_update(*args: str) -> dict:
 def journal(unit: str, lines: int = 100) -> str:
     return _run(["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short-iso"],
                 timeout=10)
+
+
+def proxy_cmd(*args: str, timeout: int = 180) -> dict:
+    """Run osrs-proxy (see fleet/linux/osrs-proxy); it prints one JSON line."""
+    try:
+        res = subprocess.run(["/opt/osrs/bin/osrs-proxy", *args], capture_output=True,
+                             text=True, timeout=timeout)
+        return json.loads(res.stdout.strip().splitlines()[-1])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def stop_bot(n: int) -> bool:
@@ -297,6 +308,11 @@ class Handler(BaseHTTPRequestHandler):
                          if q and q in l.lower() and "password" not in l.lower() and "token" not in l.lower()]
                 out[f] = lines[:200]
             self._json(out)
+        elif m := re.fullmatch(r"/api/slot/(\d+)/proxy", path):
+            n = int(m.group(1))
+            if not 1 <= n <= SLOTS:
+                return self._json({"error": "bad slot"}, 400)
+            self._json(proxy_cmd("show", str(n), timeout=20))
         elif path == "/api/geometry":
             self._json({str(n): window_geometry(n) for n in range(1, SLOTS + 1)})
         elif path == "/api/slots":
@@ -381,6 +397,21 @@ class Handler(BaseHTTPRequestHandler):
         n, action = int(m.group(1)), m.group(2)
         if not 1 <= n <= SLOTS:
             return self._json({"ok": False, "error": "bad slot"}, 400)
+        if action == "proxy":
+            # {"url": "socks5://login:pass@host:port"} = own proxy for this slot, {"off": true} = home IP.
+            # RuneLite restarts so the game connects through the new route.
+            b = self._body()
+            if b.get("off"):
+                r = proxy_cmd("off", str(n))
+            elif b.get("url"):
+                r = proxy_cmd("set", str(n), str(b["url"]))
+            else:
+                return self._json({"ok": False, "error": "give url or off"}, 400)
+            if r.get("ok"):
+                subprocess.run(["systemctl", "restart", f"osrs-client@{n}.service"], capture_output=True)
+            return self._json(r)
+        if action == "proxy-test":
+            return self._json(proxy_cmd("test", str(n), timeout=60))
         if action == "stop-bot":
             LAUNCHER.stop([n])  # so the launcher doesn't restart it
             return self._json({"ok": stop_bot(n)})
