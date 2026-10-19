@@ -218,6 +218,11 @@ class BotExecutor(Bot):
             if txt.sum() < 6:
                 self.log.debug(f"HP number not found near the orb ({x1},{y1})-({x2},{y2})")
                 return None
+            ys, xs = np.nonzero(txt)
+            if not getattr(self, "_hp_logged", False):
+                self._hp_logged = True
+                self.log.debug(f"HP orb {h.bounding_box}, search ({x1},{y1})-({x2},{y2}); number pixels "
+                               f"{sorted(set((int(x) + x1, int(y) + y1, int(r[y, x]), int(g[y, x])) for y, x in zip(ys, xs)))[:60]}")
             rm, gm = float(r[txt].mean()), float(g[txt].mean())
             if gm >= rm:   # green .. yellow: 100% .. 50%
                 pct = 100 - 50 * rm / 255
