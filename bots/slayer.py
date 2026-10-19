@@ -77,7 +77,7 @@ class BotConfig(BotConfigMixin):
     loot_wait: RangeParam = RangeParam(1.0, 1.8)   # after a kill, wait for the drop to appear
     loot_max_distance: IntParam = IntParam(170)    # px from the character: ignore loot further away
     max_loot_per_kill: IntParam = IntParam(4)      # pick-ups to try after one kill
-    pickup_timeout: FloatParam = FloatParam(6.0)   # walk there + pick up
+    pickup_timeout: FloatParam = FloatParam(8.0)   # walk there + pick up
     use_delay: RangeParam = RangeParam(1.1, 1.7)   # between burying bones (one per ~1.2 s)
 
     # --- nothing to attack ---
@@ -377,11 +377,49 @@ class BotExecutor(Bot):
             if d > self.cfg.loot_max_distance.value:
                 continue
             found.append((d, MatchResult(int(x), int(y), int(x + w), int(y + h))))
+        if not found:
+            # outline hidden (by the character or a cow): use the item name labels instead -
+            # Ground Items stacks them just above the item, so aim a little below the lowest one
+            found = self._loot_from_labels(stats, num, px, py)
         found.sort(key=lambda t: t[0])
         self.log.debug(f"Loot tiles: {len(found)} usable of {num - 1} purple blobs (player at {px},{py}); "
                        f"usable x,y,w,h: {[m.bounding_box for _, m in found[:5]]}; "
                        f"big blobs x,y,w,h,area,dist: {[b for b in seen if b[2] >= 10 and b[3] >= 9][:10]}")
         return [m for _, m in found]
+
+    def _loot_from_labels(self, stats, num, px, py) -> list[tuple[float, MatchResult]]:
+        letters = []
+        for i in range(1, num):
+            x, y, w, h, area = (int(v) for v in stats[i])
+            if 7 <= h <= 15 and w >= 4 and area / float(w * h) > LOOT_MAX_FILL:
+                letters.append((x, y, w, h))
+        # join letters/words of one label line: same baseline, small gaps
+        letters.sort(key=lambda b: (b[1] + b[3], b[0]))
+        lines: list[list[int]] = []  # [x1, y1, x2, y2]
+        for x, y, w, h in letters:
+            for ln in lines:
+                if abs((y + h) - ln[3]) <= 3 and x - ln[2] <= 10 and ln[0] - (x + w) <= 10:
+                    ln[0], ln[1], ln[2], ln[3] = min(ln[0], x), min(ln[1], y), max(ln[2], x + w), max(ln[3], y + h)
+                    break
+            else:
+                lines.append([x, y, x + w, y + h])
+        lines = [ln for ln in lines if ln[2] - ln[0] >= 25]  # a real label, not one letter
+        # a pile has several labels stacked; keep the lowest line of each stack
+        piles = []
+        for ln in sorted(lines, key=lambda l: -l[3]):
+            cx = (ln[0] + ln[2]) / 2
+            if any(abs(cx - (p[0] + p[2]) / 2) < 40 and 0 < p[1] - ln[3] < 60 for p in piles):
+                continue
+            piles.append(ln)
+        out = []
+        for x1, y1, x2, y2 in piles:
+            cx, cy = (x1 + x2) // 2, y2 + 9
+            d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+            if d <= self.cfg.loot_max_distance.value:
+                out.append((d, MatchResult(cx - 5, cy - 4, cx + 5, cy + 4)))
+        if out:
+            self.log.debug(f"No loot outline visible; aiming under {len(out)} item label(s)")
+        return out
 
     def _wanted_loot(self) -> list[str]:
         """Item names worth picking up now (keep-items only while there's room for them)."""
@@ -531,6 +569,7 @@ class BotExecutor(Bot):
                 self.log.debug(f"Inventory check failed: {e}")
                 return
             if not items:
+                self.log.debug(f"No {names} in the inventory")
                 return
             m = items[0]
             # mouse-over of an inventory item: "Bury Bones", "Eat Trout"...
