@@ -10,7 +10,7 @@ works exactly like the launcher page.
   minute until it is there, so no restart is needed after adding it.
 * Answers only the owner: the first private chat that writes to it
   (saved in /var/lib/osrs/telegram.json).
-* Messages without asking: a run finished, a bot stopped on its own and is
+* Messages without asking: a run finished, a character died, a bot stopped on its own and is
   restarted (or gave up after 3 tries), a login failed.
 
 Only the standard library + Pillow (in the bot venv) for the screens picture.
@@ -219,12 +219,12 @@ def status_text() -> str:
     s = slots()
     names = {x["slot"]: x["account"] for x in s}
     r = runs()
-    lines, counts = [], {"running": 0, "waiting": 0, "starting": 0, "error": 0}
+    lines, counts = [], {"running": 0, "waiting": 0, "starting": 0, "error": 0, "dead": 0}
     for x in s:
         n = x["slot"]
         run = r.get(str(n))
         name = acct_name(n, names)
-        if run and run["status"] in ACTIVE + ("error",):
+        if run and run["status"] in ACTIVE + ("error", "dead"):
             counts[run["status"]] += 1
             bot = "free roam" if run["bot"] == "freeroam" else run["bot"]
             if run["status"] == "running":
@@ -235,6 +235,8 @@ def status_text() -> str:
                 lines.append(f"⏳ {n} {name} - {bot}, starts in {fmt_s(run['starts_in'])}")
             elif run["status"] == "starting":
                 lines.append(f"⏳ {n} {name} - {bot}: {run.get('msg') or 'starting'}")
+            elif run["status"] == "dead":
+                lines.append(f"💀 {n} {name} - died ({bot} stopped)")
             else:
                 lines.append(f"❌ {n} {name} - {bot}: {run.get('msg')}")
         else:
@@ -253,6 +255,8 @@ def status_text() -> str:
         head.append(f"{counts['waiting'] + counts['starting']} starting")
     if counts["error"]:
         head.append(f"{counts['error']} failed")
+    if counts["dead"]:
+        head.append(f"{counts['dead']} dead")
     out = ("📊 " + (", ".join(head) if head else "nothing running")) + "\n\n" + "\n".join(lines)
     try:
         st = dash("/api/stats?min=5", timeout=10)["vm"]
@@ -694,7 +698,9 @@ def watcher():
                 if r["bot"] == "freeroam":
                     msgs.append(f"✅ Free roam over: {who}")
                 else:
-                    msgs.append(f"✅ Run finished: {who} - {bot}, ~{fmt_s(ran)} (still logged in)")
+                    msgs.append(f"✅ Run finished: {who} - {bot}, ~{fmt_s(ran)} (logged out)")
+            elif st == "dead" and ps != "dead":
+                msgs.append(f"💀 {who} died - {bot} stopped, the character is left where it is.")
             elif st == "error" and ps != "error":
                 if is_login(msg):
                     msgs.append(f"🔑 Login failed: {who}\n   {msg}")

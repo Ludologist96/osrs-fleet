@@ -359,6 +359,7 @@ class BotManagerService:
     def start_bot(self, bot_id: str, config: Dict[str, Any], username: str = "") -> bool:
         log.info(f"start_bot() called for bot_id: {bot_id}")
         self.last_error = None
+        self.last_exit_reason = None
         try:
             if self.current_bot:
                 log.info(f"Stopping currently running bot: {self.current_bot.bot_id}")
@@ -392,6 +393,8 @@ class BotManagerService:
                     import traceback
                     log.error(f"Bot {bid} raised an unhandled exception:\n{traceback.format_exc()}")
                 finally:
+                    # why it ended by itself, e.g. "died" (the launcher reads it from the status)
+                    self.last_exit_reason = getattr(executor, "exit_reason", None)
                     # stopped by the user / the launcher's timer (not when it ended by itself)
                     control = getattr(executor, "control", None)
                     if control is not None and control.terminate and hasattr(executor, "logout_after_stop"):
@@ -453,12 +456,14 @@ class BotManagerService:
             return False
 
     def get_bot_status(self, bot_id: str) -> Dict[str, Any]:
+        reason = getattr(self, "last_exit_reason", None)
         if not self.current_bot or self.current_bot.bot_id != bot_id:
-            return {"status": "not_running"}
+            return {"status": "not_running", "reason": reason}
 
         if not self.current_bot.thread.is_alive():
+            self.current_bot.executor.logout_on_stop = False  # ended by itself: leave it as it is
             self.stop_bot(bot_id)
-            return {"status": "terminated"}
+            return {"status": "terminated", "reason": getattr(self, "last_exit_reason", None)}
 
         try:
             if hasattr(self.current_bot.executor, "control"):

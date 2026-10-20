@@ -71,9 +71,11 @@ class BotConfig(BotConfigMixin):
     # --- health (no food yet): below min_hp don't start a fight, rest until resume_hp ---
     # In % of max HP, read from the colour of the HP number on the minimap orb
     # (the game colours it green at full health, yellow at half, red when low).
-    # A cow fight can cost a 10-HP character half its HP: start fights only from 70%.
-    min_hp: IntParam = IntParam(70)
-    resume_hp: IntParam = IntParam(95)
+    min_hp: IntParam = IntParam(30)
+    resume_hp: IntParam = IntParam(50)
+    # Died anyway: the bot stops and leaves the character there (exit_reason "died",
+    # the launcher shows it and Telegram sends an alert).
+    death_check_jump: IntParam = IntParam(40)  # HP % jump that regeneration can't explain (respawned)
     rest_check: RangeParam = RangeParam(20, 40)  # seconds between HP checks while resting
 
     # --- loot (RuneLite Ground Items highlights these; the launcher sets it) ---
@@ -162,6 +164,8 @@ class BotExecutor(Bot):
         self.full_warned = False
         self.attack_hover = [f"Attack {t}" for t in self.cfg.targets.value]
         self.unreachable: list[tuple[float, int, int]] = []  # (time, x, y) of failed attacks
+        self.exit_reason: str | None = None  # "died" when the character died
+        self._last_hp: tuple[float, int] | None = None  # (time, %) of the last HP reading
 
     # ------------------------------------------------------------------
     def start(self):
@@ -200,6 +204,8 @@ class BotExecutor(Bot):
         self.control.propose_break()
         hp = self._hp()
         self.log.debug(f"HP {hp}%")
+        if self._died(hp):
+            return "stop"
         if hp is not None and hp < self.cfg.min_hp.value:
             return self._rest(hp)
         if self.kills and random.random() < self.cfg.camera_chance.value:
@@ -208,6 +214,9 @@ class BotExecutor(Bot):
             self.no_target = 0
             return
         self.no_target += 1
+        # nothing around: maybe it died and stands in Lumbridge
+        if self.no_target in (3, 10) and self._died(None, check_chat=True):
+            return "stop"
         if self.no_target > self.cfg.max_no_target.value:
             self.log.error(f"Nothing to attack for {self.no_target} tries in a row. Stopping.")
             return "stop"
@@ -225,6 +234,30 @@ class BotExecutor(Bot):
         if pct is not None:
             return pct
         return self._hp_number_colour()
+
+    def _died(self, hp: int | None, check_chat: bool = False) -> bool:
+        """Did the character die? A dead character respawns in Lumbridge with full HP and
+        the chat says "Oh dear, you are dead!". HP regenerates ~1 point a minute, so a big
+        jump up between two readings means a respawn: then (or when asked) read the chat."""
+        now = time.time()
+        if hp is not None:
+            prev = self._last_hp
+            self._last_hp = (now, hp)
+            if prev and now - prev[0] < 180 and hp - prev[1] >= self.cfg.death_check_jump.value:
+                self.log.info(f"HP jumped {prev[1]}% -> {hp}%: checking the chat for a death")
+                check_chat = True
+        if not check_chat:
+            return False
+        try:
+            text = self.client.get_chat_text().lower()
+        except Exception as e:
+            self.log.debug(f"Couldn't read the chat: {e}")
+            return False
+        if "you are dead" in text or "oh dear" in text:
+            self.log.critical("The character died. Stopping and leaving it where it is.")
+            self.exit_reason = "died"
+            return True
+        return False
 
     def _hp_orb(self) -> int | None:
         """The HP orb fills with red from the bottom in proportion to HP. Per row of the
@@ -310,6 +343,8 @@ class BotExecutor(Bot):
                 break
             self.control.propose_break()
             hp = self._hp()
+            if self._died(hp):
+                return "stop"
             if hp is not None and hp >= self.cfg.resume_hp.value:
                 self.log.info(f"HP {hp}%: back to fighting")
                 return

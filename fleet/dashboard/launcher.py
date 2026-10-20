@@ -272,7 +272,7 @@ class Launcher:
             targets = [int(k) for k in self.runs] if not slots else slots
             for n in targets:
                 r = self.runs.get(str(n))
-                if not r or r["status"] in ("done", "error", "stopped"):
+                if not r or r["status"] in ("done", "error", "stopped", "dead"):
                     continue
                 if r["status"] == "running" and r["bot"] != FREEROAM:
                     self._stop_bot(n, r["bot"])
@@ -314,8 +314,12 @@ class Launcher:
                 elif r["bot"] == FREEROAM:
                     continue
                 else:
-                    st = self._bot_status(n, r["bot"])
-                    if st not in ("running", "paused", None):
+                    info = self._bot_info(n, r["bot"])
+                    st = info.get("status") if info else None
+                    if st not in ("running", "paused", None) and info.get("reason") == "died":
+                        # leave a dead character alone (no restart); Telegram sends an alert
+                        self._set(n, status="dead", msg="the character died; bot stopped, left it there")
+                    elif st not in ("running", "paused", None):
                         # stopped unexpectedly (bot app restarted by an update, or a crash):
                         # start it again a few times before giving up
                         # count only restarts close together (a crash loop), not one per update
@@ -446,6 +450,12 @@ class Launcher:
             self._set(n, msg=f"{bot} running (restarted)", resuming=False)
         except Exception as e:
             self._set(n, msg=f"restart failed: {e}", resuming=False)
+
+    def _bot_info(self, n: int, bot: str) -> dict | None:
+        try:
+            return _http("GET", f"{_app(n)}/api/bot/{bot}/status", timeout=4)
+        except Exception:
+            return None  # app restarting (e.g. update): don't count as a failure
 
     def _bot_status(self, n: int, bot: str):
         try:
