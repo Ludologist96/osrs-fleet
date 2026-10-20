@@ -50,8 +50,10 @@ class Bot:
         
         self.api.start(port=instance.port(5432))
 
-        # Every bot starts on the inventory tab.
-        self._open_inventory()
+        # Every bot starts on the inventory tab, fully zoomed out and top-down.
+        from core.camera import Camera
+        self.camera = Camera(self.client)  # subclasses may replace it with their own limits
+        self._start_view()
         
         
     def _log_back_in(self):
@@ -60,7 +62,7 @@ class Bot:
         if result.get("state") != "game":
             raise RuntimeError(f"still not in game: {result}")
         self.log.info("Back in the game")
-        self._open_inventory()
+        self._start_view()
 
     def _log_out(self):
         """Logout tab -> the red "Click here to logout" button. Verified by the game view
@@ -111,6 +113,13 @@ class Bot:
                     self.log.info("Logged out")
                     return
         raise RuntimeError("couldn't log out")
+
+    def _start_view(self):
+        self._open_inventory()
+        try:
+            self.camera.top_down()
+        except Exception:
+            self.log.warning("Couldn't set the top-down camera", exc_info=True)
 
     def _open_inventory(self):
         from core.osrs_client import ToolplaneTab
