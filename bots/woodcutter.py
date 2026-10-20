@@ -140,6 +140,8 @@ class BotExecutor(Bot):
         
         while not self.terminate:
             try:
+                if not self.watchdog():  # logged out / disconnected and couldn't get back in
+                    break
                 # Check if inventory is full
                 if self.check_inventory_full():
                     if self.cfg.drop_items.value:
@@ -226,6 +228,9 @@ class BotExecutor(Bot):
             except Exception as e:
                 if self.terminate:
                     break
+                if self.recover_window(e):  # RuneLite restarted: back in, carry on
+                    self.consecutive_failures = 0
+                    continue
                 self.consecutive_failures += 1
                 self.log.error(f"Error in woodcutting process: {e}")
                 

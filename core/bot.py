@@ -134,6 +134,84 @@ class Bot:
         finally:
             self.control._tls.bypass = False
 
+    # ------------------------------------------------------------------ watchdog
+    WATCHDOG_EVERY = 30.0   # s between screen checks
+    RELOGIN_TRIES = 5   # the login server sometimes refuses for a few minutes
+
+    def watchdog(self, force: bool = False) -> bool:
+        """Look at the screen every so often: still in the game? If it got logged out
+        (disconnect, idle logout) log back in and carry on. Planned long breaks are left
+        alone (the break itself logs out and back in). Returns False when it couldn't get
+        back in (the caller should stop; exit_reason is "login_failed")."""
+        import time
+        from core import login
+        now = time.time()
+        if not force and now - getattr(self, "_watchdog_last", 0) < self.WATCHDOG_EVERY:
+            return True
+        self._watchdog_last = now
+        c = self.control
+        if c.terminate or c._relogin_needed or c._relogging or now < c.long_break_end or now < c.break_until:
+            return True
+        try:
+            self.client.ensure_window()  # RuneLite restarted: use its new window
+            st = login.state()
+        except Exception as e:
+            self.log.debug(f"Watchdog: couldn't read the screen: {e}")
+            return True
+        if st.get("state") == "game":
+            self.watchdog_in_game()
+            return True
+        self.log.warning(f"Watchdog: not in the game (disconnected or logged out; "
+                         f"confidence {st.get('in_game_confidence')}) - logging back in")
+        for attempt in range(1, self.RELOGIN_TRIES + 1):
+            if c.terminate:
+                return True
+            try:
+                self._log_back_in()
+                self.log.info(f"Watchdog: back in the game (attempt {attempt})")
+                self.relogins = getattr(self, "relogins", 0) + 1
+                return True
+            except Exception as e:
+                self.log.warning(f"Watchdog: login attempt {attempt} failed: {e}")
+                time.sleep(15 * attempt)  # 15, 30, 45, 60 s
+        self.log.error("Watchdog: couldn't get back into the game. Stopping.")
+        self.exit_reason = "login_failed"
+        return False
+
+    def recover_window(self, error: Exception | None = None, timeout: float = 180.0) -> bool:
+        """After an error: if the RuneLite window is gone (client crashed or restarted -
+        a new one takes up to a minute to open), wait for it, then log back in.
+        Returns True when it handled such a case (the caller shouldn't count the error)."""
+        import time
+        if self.client.ensure_window() and not (error and "is not open" in str(error)):
+            return False
+        self.log.warning("RuneLite window not there: waiting for the client to come back")
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self.control.terminate:
+            time.sleep(5)
+            if self.client.ensure_window():
+                time.sleep(5)  # let it finish drawing the login screen
+                self.watchdog(force=True)
+                return True
+        self.log.error(f"RuneLite didn't come back within {timeout / 60:.0f} min")
+        return False
+
+    def watchdog_in_game(self):
+        """Extra checks while in the game; bots override (e.g. close a stray menu)."""
+
+    def save_debug_shot(self, tag: str) -> None:
+        """Keep a screenshot of an odd moment: data/screenshots/watchdog/slotN-<tag>-<time>.png"""
+        import time
+        from core import instance
+        try:
+            os.makedirs("data/screenshots/watchdog", exist_ok=True)
+            path = (f"data/screenshots/watchdog/slot{getattr(instance, 'SLOT', 0)}-{tag}-"
+                    f"{time.strftime('%Y%m%d-%H%M%S')}.png")
+            self.client.get_screenshot().save(path)
+            self.log.info(f"Saved screenshot {path}")
+        except Exception as e:
+            self.log.debug(f"Couldn't save a screenshot: {e}")
+
     def _start_view(self):
         self._open_inventory()
         try:

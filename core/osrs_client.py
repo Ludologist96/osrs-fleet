@@ -229,9 +229,26 @@ class GenericWindow:
         """
         Brings the RuneLite window to the foreground using platform-specific window manager.
         """
+        self.ensure_window()
         if self.is_open:
             # Use the platform-specific implementation from the window manager
             self.window.bring_to_focus()
+
+    def ensure_window(self) -> bool:
+        """The RuneLite window can be replaced (client restarted after a crash or by the
+        launcher): then find the new one instead of using the dead one forever. The
+        layout is fixed, so the window-relative UI positions stay valid."""
+        w = self.window
+        exists = getattr(w, "exists", None)
+        if w is not None and (exists is None or exists()):
+            return True
+        if w is not None:
+            self.log.warning("The RuneLite window is gone (client restarted?): looking for the new one")
+        self.window = None
+        self.update_window()
+        if self.window is not None:
+            self.log.info("Found the RuneLite window again")
+        return self.window is not None
 
     def move_off_window(self, offset: int | None = None):
         """

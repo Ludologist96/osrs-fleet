@@ -77,6 +77,12 @@ class BotConfig(BotConfigMixin):
     # the launcher shows it and Telegram sends an alert).
     death_check_jump: IntParam = IntParam(40)  # HP % jump that regeneration can't explain (respawned)
     rest_check: RangeParam = RangeParam(20, 40)  # seconds between HP checks while resting
+    # While resting do something small every so often (the game logs out an idle
+    # player after ~5 min): turn the camera, a step via the minimap, a look at a tab.
+    rest_fidget_every: RangeParam = RangeParam(40, 75)
+    rest_walk_chance: FloatParam = FloatParam(0.35)
+    # No kill and no resting for this long: look at the screen, save it, reset the view.
+    stuck_after: FloatParam = FloatParam(480.0)
 
     # --- loot (RuneLite Ground Items highlights these; the launcher sets it) ---
     loot: BooleanParam = BooleanParam(True)
@@ -164,7 +170,9 @@ class BotExecutor(Bot):
         self.full_warned = False
         self.attack_hover = [f"Attack {t}" for t in self.cfg.targets.value]
         self.unreachable: list[tuple[float, int, int]] = []  # (time, x, y) of failed attacks
-        self.exit_reason: str | None = None  # "died" when the character died
+        self.exit_reason: str | None = None  # "died" / "login_failed"
+        self._progress_t = time.time()  # last kill or rest (stuck check)
+        self._hp_misses = 0
         self._last_hp: tuple[float, int] | None = None  # (time, %) of the last HP reading
 
     # ------------------------------------------------------------------
@@ -183,6 +191,9 @@ class BotExecutor(Bot):
                 except Exception as e:
                     if self.terminate:
                         break
+                    if self.recover_window(e):  # RuneLite restarted: back in, carry on
+                        self.failures = 0
+                        continue
                     self.failures += 1
                     self.log.error(f"Error ({self.failures}/{self.cfg.max_retries.value}): {e}", exc_info=True)
                     if self.failures > self.cfg.max_retries.value:
@@ -196,6 +207,19 @@ class BotExecutor(Bot):
             self.log.info(f"Stopped after {self.kills} kills")
 
     def _step(self):
+        if not self.watchdog():
+            return "stop"
+        if time.time() - self._progress_t > self.cfg.stuck_after.value:
+            self.log.warning(f"No kill for {self.cfg.stuck_after.value / 60:.0f} min: checking the screen")
+            self.save_debug_shot("stuck")
+            self._close_menu()
+            if not self.watchdog(force=True):
+                return "stop"
+            try:
+                self.camera.top_down()
+            except Exception:
+                self.log.warning("Couldn't reset the camera", exc_info=True)
+            self._progress_t = time.time()
         state = self.fight_state()
         if state == "fighting":
             self._wait_fight_end()
@@ -204,6 +228,12 @@ class BotExecutor(Bot):
         self.control.propose_break()
         hp = self._hp()
         self.log.debug(f"HP {hp}%")
+        if hp is None:
+            self._hp_misses += 1
+            if self._hp_misses >= 3 and not self.watchdog(force=True):  # HP orb gone: logged out?
+                return "stop"
+        else:
+            self._hp_misses = 0
         if self._died(hp):
             return "stop"
         if hp is not None and hp < self.cfg.min_hp.value:
@@ -258,6 +288,33 @@ class BotExecutor(Bot):
             self.exit_reason = "died"
             return True
         return False
+
+    def _rest_fidget(self):
+        """Something small a resting player does (and it keeps the game from logging
+        out an idle player): a step via the minimap, or turn the camera, or a tab look."""
+        try:
+            r = random.random()
+            if r < self.cfg.rest_walk_chance.value:
+                # a minimap click only ever walks (a click in the world could attack a cow)
+                mm = self.client.minimap.map
+                cx, cy = mm.get_center()
+                ang = random.uniform(0, 6.283)
+                dist = random.uniform(5, 14)  # px on the minimap: ~1-3 tiles
+                import math
+                pt = (int(cx + dist * math.cos(ang)), int(cy + dist * math.sin(ang)))
+                self.client.click(pt)
+                self.log.info(f"Resting: a few steps (minimap centre {cx},{cy}, clicked {pt})")
+            elif r < 0.8:
+                self.camera.rotate(random.uniform(0.25, 0.8))
+                self.log.info("Resting: turned the camera")
+            else:
+                self._browse_tabs()
+                self.log.info("Resting: looked at a tab")
+        except Exception:
+            self.log.warning("Resting fidget failed", exc_info=True)
+
+    def watchdog_in_game(self):
+        self._close_menu()  # a menu left open swallows the next click
 
     def _hp_orb(self) -> int | None:
         """The HP orb fills with red from the bottom in proportion to HP. Per row of the
@@ -334,15 +391,26 @@ class BotExecutor(Bot):
         (about 1 HP a minute). Breaks still happen meanwhile."""
         self.log.warning(f"HP {hp}% < {self.cfg.min_hp.value}%: resting until {self.cfg.resume_hp.value}%")
         start = time.time()
+        next_fidget = time.time() + self.cfg.rest_fidget_every.choose()
+        misses = 0
         while not self.terminate and time.time() - start < 40 * 60:
             # sleep in short steps so a stop takes effect at once
             until = time.time() + self.cfg.rest_check.choose()
             while not self.terminate and time.time() < until:
                 time.sleep(0.5)
+                if time.time() >= next_fidget:
+                    self._rest_fidget()
+                    next_fidget = time.time() + self.cfg.rest_fidget_every.choose()
             if self.terminate:
                 break
             self.control.propose_break()
+            if not self.watchdog():
+                return "stop"
+            self._progress_t = time.time()
             hp = self._hp()
+            misses = misses + 1 if hp is None else 0
+            if misses >= 2 and not self.watchdog(force=True):
+                return "stop"
             if self._died(hp):
                 return "stop"
             if hp is not None and hp >= self.cfg.resume_hp.value:
@@ -398,6 +466,7 @@ class BotExecutor(Bot):
             state = self.fight_state()
             if state != "fighting":
                 self.kills += 1
+                self._progress_t = time.time()
                 self.log.info(f"Target down ({state}) after {time.time() - start:.0f}s - kills: {self.kills}")
                 t0 = time.time()
                 fight_s = t0 - getattr(self, "_t_fight_start", start)

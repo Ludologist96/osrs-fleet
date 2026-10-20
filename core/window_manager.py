@@ -388,6 +388,15 @@ class LinuxWindow:
     def title(self):
         """Return the title of the window"""
         return self._title
+
+    def exists(self) -> bool:
+        """False once the X window is gone (RuneLite restarted or crashed): the other
+        properties then fall back to screen-sized values and every call logs errors."""
+        try:
+            self.window.get_geometry()
+            return True
+        except Exception:
+            return False
     
     @property
     def width(self):

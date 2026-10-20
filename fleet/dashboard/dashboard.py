@@ -329,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
             # Last lines of one slot part's log (what `fleetctl logs N part` shows).
             n, comp = int(m.group(1)), m.group(2)
             lm = re.search(r"(?:^|&)n=(\d+)", query)
-            lines = min(1000, int(lm.group(1))) if lm else 100
+            lines = min(20000, int(lm.group(1))) if lm else 100
             if not 1 <= n <= SLOTS:
                 return self._json({"error": "bad slot"}, 400)
             self._send(200, journal(f"osrs-{comp}@{n}.service", lines).encode(), "text/plain; charset=utf-8")
