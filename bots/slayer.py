@@ -251,7 +251,12 @@ class BotExecutor(Bot):
         self.log.warning(f"HP {hp}% < {self.cfg.min_hp.value}%: resting until {self.cfg.resume_hp.value}%")
         start = time.time()
         while not self.terminate and time.time() - start < 40 * 60:
-            time.sleep(self.cfg.rest_check.choose())
+            # sleep in short steps so a stop takes effect at once
+            until = time.time() + self.cfg.rest_check.choose()
+            while not self.terminate and time.time() < until:
+                time.sleep(0.5)
+            if self.terminate:
+                break
             self.control.propose_break()
             hp = self._hp()
             if hp is not None and hp >= self.cfg.resume_hp.value:

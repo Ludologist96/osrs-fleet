@@ -363,6 +363,10 @@ class BotManagerService:
             if self.current_bot:
                 log.info(f"Stopping currently running bot: {self.current_bot.bot_id}")
                 self.stop_bot(self.current_bot.bot_id)
+            # The new bot's Bot.__init__ resets the shared ScriptControl (terminate=False).
+            # A stopped bot whose thread is still sleeping (e.g. resting for HP) would then
+            # wake up and keep playing next to the new one, so wait for it to finish first.
+            self._wait_old_thread()
 
             bot_metadata = self.bot_registry.get(bot_id)
             if not bot_metadata:
@@ -408,6 +412,17 @@ class BotManagerService:
                 self.current_bot = None
             return False
 
+    def _wait_old_thread(self, timeout: float = 90.0) -> None:
+        t = getattr(self, "_old_thread", None)
+        if t is None or not t.is_alive():
+            self._old_thread = None
+            return
+        log.info("Waiting for the previous bot to finish stopping...")
+        t.join(timeout)
+        if t.is_alive():
+            raise RuntimeError(f"previous bot still running after {timeout:.0f}s; not starting a second one")
+        self._old_thread = None
+
     def stop_bot(self, bot_id: str) -> bool:
         if not self.current_bot or self.current_bot.bot_id != bot_id:
             return False
@@ -419,6 +434,7 @@ class BotManagerService:
                 executor.control.terminate = True
 
             elapsed = self.current_bot.get_elapsed_time_hms()
+            self._old_thread = self.current_bot.thread
             self.current_bot = None
             log.info(f"Stopped bot {bot_id} (ran {elapsed})")
             return True
