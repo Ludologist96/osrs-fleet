@@ -71,8 +71,9 @@ class BotConfig(BotConfigMixin):
     # --- health (no food yet): below min_hp don't start a fight, rest until resume_hp ---
     # In % of max HP, read from the colour of the HP number on the minimap orb
     # (the game colours it green at full health, yellow at half, red when low).
-    min_hp: IntParam = IntParam(50)
-    resume_hp: IntParam = IntParam(90)
+    # A cow fight can cost a 10-HP character half its HP: start fights only from 70%.
+    min_hp: IntParam = IntParam(70)
+    resume_hp: IntParam = IntParam(95)
     rest_check: RangeParam = RangeParam(20, 40)  # seconds between HP checks while resting
 
     # --- loot (RuneLite Ground Items highlights these; the launcher sets it) ---
@@ -218,6 +219,51 @@ class BotExecutor(Bot):
 
     # ------------------------------------------------------------------ health
     def _hp(self) -> int | None:
+        """HP in % of max: the red fill level of the minimap HP orb (exact), else the
+        colour of the number next to it (coarse: it misread 31% as 90% once)."""
+        pct = self._hp_orb()
+        if pct is not None:
+            return pct
+        return self._hp_number_colour()
+
+    def _hp_orb(self) -> int | None:
+        """The HP orb fills with red from the bottom in proportion to HP. Per row of the
+        orb: mostly red = filled. The heart icon sits in the empty part too, but it covers
+        only about half a row, so those rows don't count as filled."""
+        try:
+            sc = self.client.get_screenshot()
+            h = self.client.minimap.health
+            # seen on the fleet: orb icon box (568,47)-(590,73), the orb circle x 548-578, y 45-70
+            x1, y1, x2, y2 = h.start_x - 21, h.start_y - 4, h.start_x + 11, h.end_y
+            arr = np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2)), dtype=np.int16)
+            r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+            red = ((r > 60) & (r > 2 * g) & (r > 2 * b)).sum(axis=1)
+            dark = (~((r > 60) & (r > 2 * g) & (r > 2 * b)) & (r + g + b < 90)).sum(axis=1)
+            rows = list(zip(red.tolist(), dark.tolist()))
+            top = next((i for i, (rd, dk) in enumerate(rows) if rd + dk >= 10), None)
+            bot = len(rows) - 1
+            while bot > 0 and rows[bot][0] < 5:
+                bot -= 1
+            if top is None or bot - top < 15:
+                self.log.debug(f"HP orb not found at ({x1},{y1})-({x2},{y2})")
+                return None
+            def ratio(i):
+                rd, dk = rows[i]
+                return rd / float(rd + dk) if rd + dk else 0.0
+            # the fill's top row, with filled rows under it (the red regen-timer ring
+            # around the orb can make a single top row look filled)
+            fill_top = next((i for i, (rd, dk) in enumerate(rows)
+                             if top <= i <= bot - 3 and rd >= 6 and ratio(i) >= 0.75
+                             and all(ratio(j) >= 0.6 for j in range(i + 1, i + 4))), None)
+            if fill_top is None and ratio(bot) < 0.6:
+                fill_top = bot + 1  # empty
+            pct = 0 if fill_top is None else round(100 * (bot - fill_top + 1) / (bot - top + 1))
+            return max(0, min(100, int(pct)))
+        except Exception as e:
+            self.log.debug(f"Couldn't read the HP orb: {e}")
+            return None
+
+    def _hp_number_colour(self) -> int | None:
         """HP in % of max, from the colour of the number next to the minimap HP orb:
         the game draws it pure green at 100%, yellow at 50%, red near 0%.
         (Tesseract can't read those tiny 7 px digits reliably.)"""
