@@ -86,6 +86,7 @@ class BotConfig(BotConfigMixin):
     camera_zoom_chance: FloatParam = FloatParam(0.5)       # chance a fidget also zooms
     zoom_min: IntParam = IntParam(-4)  # wheel notches out from the starting zoom (limit)
     zoom_max: IntParam = IntParam(3)   # wheel notches in from the starting zoom (limit)
+    start_zoom_in: IntParam = IntParam(9)  # home view: fully out, then this many notches in (~halfway)
     # No marked tree visible: turn the camera to look for one (from the 2nd miss in a row)
     camera_search: BooleanParam = BooleanParam(True)
     camera_search_time: RangeParam = RangeParam(0.6, 1.4)
@@ -124,7 +125,8 @@ class BotExecutor(Bot):
         self.consecutive_failures = 0
         self.tree_index = 0  # Used to cycle through tree tiles
         self.tree_waits = 0  # drop mode: waits in a row with no marked tree
-        self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value)
+        self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value,
+                             self.cfg.start_zoom_in.value)
         self.chopped_once = False
         
         if not self.cfg.drop_items.value and not self.cfg.bank_to_trees.value:

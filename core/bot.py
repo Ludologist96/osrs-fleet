@@ -50,10 +50,13 @@ class Bot:
         
         self.api.start(port=instance.port(5432))
 
-        # Every bot starts on the inventory tab, fully zoomed out and top-down.
+        # Every bot starts on the inventory tab in the home camera view (zoomed out about
+        # halfway, top-down). The bot manager calls _start_view() when the bot starts, so
+        # a subclass can first replace self.camera with its own settings.
         from core.camera import Camera
-        self.camera = Camera(self.client)  # subclasses may replace it with their own limits
-        self._start_view()
+        self.camera = Camera(self.client)
+        # Stopping a bot (stop button, timed stop) logs the character out afterwards.
+        self.logout_on_stop = True
         
         
     def _log_back_in(self):
@@ -113,6 +116,23 @@ class Bot:
                     self.log.info("Logged out")
                     return
         raise RuntimeError("couldn't log out")
+
+    def logout_after_stop(self):
+        """Called by the bot manager after a stopped bot's loop has ended. Clicks normally
+        refuse to run once terminate is set, so let them through for the logout."""
+        from core import login
+        if not self.logout_on_stop:
+            return
+        self.control._tls.bypass = True
+        try:
+            if login.state().get("state") != "game":
+                return
+            self.log.info("Bot stopped: logging out")
+            self._log_out()
+        except Exception:
+            self.log.warning("Couldn't log out after the stop", exc_info=True)
+        finally:
+            self.control._tls.bypass = False
 
     def _start_view(self):
         self._open_inventory()

@@ -3,9 +3,9 @@ Humanized camera moves for bots: rotate with the arrow keys, zoom with the
 mouse wheel over the game view. Works on Windows and on the fleet's virtual
 screens (keys via core.input.keys, wheel via pyautogui on the bot's $DISPLAY).
 
-Zoom is tracked relative to where the camera was when the bot started, and
-kept inside [zoom_min, zoom_max] wheel notches so it never drifts to an
-unusable extreme.
+Bots start in a "home" view: fully zoomed out, then HOME_ZOOM_IN wheel notches back
+in (about halfway, so loot is big enough to click), tilted straight down. Zoom is
+tracked in notches from that home view (0) and kept inside [zoom_min, zoom_max].
 """
 
 from __future__ import annotations
@@ -28,18 +28,20 @@ GAME_VIEW = (60, 60, 460, 300)
 FULL_ZOOM_OUT_NOTCHES = 15
 # Holding "up" past the tilt limit is harmless and ends straight top-down.
 TOP_DOWN_TILT_TIME = (2.0, 2.6)
-# After a rotate fidget or a search, chance the camera goes back to top-down.
+# From fully zoomed out, scroll back in this many notches for the home view (~halfway).
+HOME_ZOOM_IN = 9  # the full range is ~18-20 notches
+# After a rotate fidget or a search, chance the camera goes back to the home view.
 RETURN_TOP_DOWN_CHANCE = 0.7
 
 
 class Camera:
-    def __init__(self, client, zoom_min: int = -4, zoom_max: int = 3):
+    def __init__(self, client, zoom_min: int = -4, zoom_max: int = 3, home_zoom_in: int = HOME_ZOOM_IN):
         self.client = client
-        self.zoom_min = zoom_min
+        self.home_zoom_in = max(0, int(home_zoom_in))
+        # notches from the home view; can't go further out than fully zoomed out
+        self.zoom_min = max(zoom_min, -self.home_zoom_in)
         self.zoom_max = zoom_max
-        # notches from the fully zoomed-out view (zoom_min); + = zoomed in.
-        # Bots start fully zoomed out (top_down), so the counter starts at the limit.
-        self.zoom = zoom_min
+        self.zoom = 0  # + = zoomed in (bots start in the home view: top_down())
         self.search_dir: str | None = None  # keep turning one way while searching
         self.log = get_logger("Camera")
 
@@ -71,15 +73,25 @@ class Camera:
             time.sleep(random.uniform(0.05, 0.12))
 
     def top_down(self) -> None:
-        """Fully zoom out and tilt straight down: the view bots start in and return to."""
+        """The home view bots start in: fully zoom out (the game clamps there, so this
+        works from any zoom), back in HOME_ZOOM_IN notches, tilt straight down."""
         self.client.bring_to_focus()
         x1, y1, x2, y2 = GAME_VIEW
         self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)), rand_move_chance=0)
         time.sleep(random.uniform(0.08, 0.2))
-        self._scroll(-1, FULL_ZOOM_OUT_NOTCHES)  # out; the game clamps at its limit
-        self.zoom = self.zoom_min
+        self._scroll(-1, FULL_ZOOM_OUT_NOTCHES)
+        if self.home_zoom_in:
+            time.sleep(random.uniform(0.1, 0.25))
+            self._scroll(1, self.home_zoom_in)
+        self.zoom = 0
         self.tilt_up(random.uniform(*TOP_DOWN_TILT_TIME))
-        self.log.info("Camera: top-down, fully zoomed out")
+        self.log.info(f"Camera: top-down, zoomed out then {self.home_zoom_in} notches in")
+
+    def go_home(self) -> None:
+        """Back to the home view the way a player would: undo the zoom, tilt down."""
+        if self.zoom:
+            self.zoom_by(-self.zoom)
+        self.tilt_up(random.uniform(0.5, 0.9))
 
     def zoom_by(self, notches: int) -> int:
         """Scroll the wheel over the game view (+ = in). Clamped; returns notches done."""
@@ -108,9 +120,9 @@ class Camera:
             if m == "rotate":
                 self.rotate(random.uniform(*rotate_time))
             elif m == "zoom":
-                # usually lean back out toward the top-down view
+                # usually lean back toward the home view
                 dz = random.choice((-2, -1, 1, 2))
-                if dz > 0 and random.random() < 0.6:
+                if self.zoom and (dz > 0) == (self.zoom > 0) and random.random() < 0.6:
                     dz = -dz
                 self.zoom_by(dz)
             else:
@@ -118,7 +130,7 @@ class Camera:
             time.sleep(random.uniform(0.1, 0.4))
         if random.random() < RETURN_TOP_DOWN_CHANCE:
             time.sleep(random.uniform(0.1, 0.3))
-            self.top_down()
+            self.go_home()
         self.log.info(f"Camera fidget: {', '.join(moves)} (zoom {self.zoom:+d})")
 
     def search(self, rotate_time: tuple[float, float], attempt: int) -> None:
@@ -131,5 +143,5 @@ class Camera:
             self.zoom_by(-random.randint(1, 2))
             self.tilt_up(random.uniform(0.3, 0.8))
         if random.random() < RETURN_TOP_DOWN_CHANCE:
-            self.top_down()
+            self.go_home()
         self.log.info(f"Camera search #{attempt} (zoom {self.zoom:+d})")

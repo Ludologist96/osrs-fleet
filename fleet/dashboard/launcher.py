@@ -10,7 +10,7 @@ For each slot the launcher:
   2. waits for RuneLite to show a saved login (window title "RuneLite - <name>"),
   3. asks the slot's bot app to log in (Play Now / CLICK HERE TO PLAY),
   4. starts the chosen bot with that slot's saved settings,
-  5. stops the bot when its time is up (the character stays logged in).
+  5. stops the bot when its time is up (the bot then logs the character out).
 """
 
 from __future__ import annotations

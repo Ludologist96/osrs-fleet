@@ -63,10 +63,10 @@ class BotConfig(BotConfigMixin):
     # --- fighting ---
     # After clicking a monster, wait up to this long for the fight to start (walking there).
     attack_start_timeout: FloatParam = FloatParam(5.0)
-    fight_check_delay: RangeParam = RangeParam(0.6, 1.3)
+    fight_check_delay: RangeParam = RangeParam(0.25, 0.5)
     max_fight_time: FloatParam = FloatParam(90.0)  # give up on one fight after this long
     # Pause after a kill before looking for the next monster (reaction time).
-    after_kill_delay: RangeParam = RangeParam(0.4, 2.2)
+    after_kill_delay: RangeParam = RangeParam(0.15, 0.6)
 
     # --- health (no food yet): below min_hp don't start a fight, rest until resume_hp ---
     # In % of max HP, read from the colour of the HP number on the minimap orb
@@ -80,16 +80,19 @@ class BotConfig(BotConfigMixin):
     loot_use: StringListParam = StringListParam(["Bones"])     # pick up and use at once (bury / eat)
     loot_keep: StringListParam = StringListParam([])  # pick up and keep (e.g. "Cowhide" once banking exists)
     loot_color: RGBParam = RGBParam(170, 0, 255)  # Ground Items highlight colour (purple)
-    loot_wait: RangeParam = RangeParam(2.4, 3.4)   # after a kill: death animation, then the drop appears
+    # After a kill the drop appears when the death animation ends: watch for it from
+    # loot_wait's low end, give up at its high end; react loot_react after it shows.
+    loot_wait: RangeParam = RangeParam(0.8, 3.6)
+    loot_react: RangeParam = RangeParam(0.08, 0.25)
     loot_max_distance: IntParam = IntParam(170)    # px from the character: ignore loot further away
     max_loot_per_kill: IntParam = IntParam(4)      # pick-ups to try after one kill
     pickup_timeout: FloatParam = FloatParam(8.0)   # walk there + pick up
-    use_delay: RangeParam = RangeParam(1.1, 1.7)   # between burying bones (one per ~1.2 s)
+    use_delay: RangeParam = RangeParam(0.95, 1.25)  # between burying bones (the game buries one per 1.2 s)
     use_check_every: IntParam = IntParam(3)  # every N kills also look for `loot_use` items left in the inventory
     loot_zoom_notches: IntParam = IntParam(2)      # item not found: zoom in this much, try again, zoom back
 
     # --- nothing to attack ---
-    no_target_wait: RangeParam = RangeParam(1.5, 4.0)
+    no_target_wait: RangeParam = RangeParam(0.8, 2.0)
     max_no_target: IntParam = IntParam(40)  # stop after this many empty looks in a row
     max_retries: IntParam = IntParam(5)  # unexpected errors in a row before stopping
 
@@ -99,6 +102,7 @@ class BotConfig(BotConfigMixin):
     camera_zoom_chance: FloatParam = FloatParam(0.5)
     zoom_min: IntParam = IntParam(-4)
     zoom_max: IntParam = IntParam(3)
+    start_zoom_in: IntParam = IntParam(9)  # home view: fully out, then this many notches in (~halfway)
     camera_search: BooleanParam = BooleanParam(True)  # nothing highlighted: look around
     camera_search_time: RangeParam = RangeParam(0.6, 1.4)
 
@@ -148,7 +152,8 @@ class BotExecutor(Bot):
                          break_ui_browse_chance=config.break_ui_browse_chance.value)
         self.cfg: BotConfig = config
         self.log = get_logger('SlayerBot')
-        self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value)
+        self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value,
+                             self.cfg.start_zoom_in.value)
         self.kills = 0
         self.no_target = 0
         self.failures = 0
@@ -313,16 +318,37 @@ class BotExecutor(Bot):
             if state != "fighting":
                 self.kills += 1
                 self.log.info(f"Target down ({state}) after {time.time() - start:.0f}s - kills: {self.kills}")
+                t0 = time.time()
+                fight_s = t0 - getattr(self, "_t_fight_start", start)
                 if self.cfg.loot.value:
                     # what's purple on screen as the monster dies: the drop will be what's new
                     before = self._loot_mask()
-                    time.sleep(self.cfg.loot_wait.choose())
+                    self._wait_for_drop(before)
+                    t1 = time.time()
                     self.pick_up_loot(before)
+                    t2 = time.time()
                     self.use_items()
+                    t3 = time.time()
+                    self.log.info(f"Timing: fight {fight_s:.1f}s, drop wait {t1 - t0:.1f}s, "
+                                  f"pick-up {t2 - t1:.1f}s, use {t3 - t2:.1f}s")
                 elif self.cfg.loot_use.value and self.kills % max(1, self.cfg.use_check_every.value) == 0:
                     self.use_items()
                 time.sleep(self.cfg.after_kill_delay.choose())
+                self._t_idle = time.time()
                 return
+
+    def _wait_for_drop(self, before: np.ndarray):
+        """Watch for new purple (the drop's highlight) instead of always waiting the
+        whole death animation; react shortly after it appears."""
+        lo, hi = self.cfg.loot_wait.value
+        time.sleep(lo)
+        grown = cv2.dilate(before.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+        deadline = time.time() + max(0.0, hi - lo)
+        while time.time() < deadline and not self.terminate:
+            if int((self._loot_mask() & ~grown).sum()) >= 25:
+                time.sleep(self.cfg.loot_react.choose())
+                return
+            time.sleep(random.uniform(0.08, 0.15))
 
     # ------------------------------------------------------------------ targets
     def find_targets(self) -> list[MatchResult]:
@@ -361,7 +387,7 @@ class BotExecutor(Bot):
             tried += 1
             # aim a bit inside the hull, not at its edge
             inner = m.scale_px(-max(2, min(m.width, m.height) // 5))
-            reach_before = self._cant_reach_count()
+            reach_before = self._chat_image()
             if not self.hover_click(inner, self.attack_hover, tries=2):
                 self.log.debug("Not attackable here")
                 continue
@@ -595,7 +621,7 @@ class BotExecutor(Bot):
             # wait until it lands in the inventory (walk there + pick up)
             deadline = time.time() + float(self.cfg.pickup_timeout.value)
             while time.time() < deadline and not self.terminate:
-                time.sleep(random.uniform(0.4, 0.7))
+                time.sleep(random.uniform(0.2, 0.35))
                 if self._free_slots() < before_slots or self._count_items(names) > before_items:
                     self.looted += 1
                     self.log.info(f"Picked up loot ({self.looted} so far)")
@@ -604,7 +630,7 @@ class BotExecutor(Bot):
                 self.log.info("Pick-up didn't happen (someone else took it?)")
                 self._zoom_back()
                 return
-            time.sleep(random.uniform(0.2, 0.6))
+            time.sleep(random.uniform(0.1, 0.3))
         self._zoom_back()
 
     def _zoom_in_for_pile(self, pts: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -645,7 +671,7 @@ class BotExecutor(Bot):
         menu_tried = 0
         for x, y in pts:
             self.client.move_to((x, y), rand_move_chance=0)
-            time.sleep(random.uniform(0.1, 0.2))
+            time.sleep(random.uniform(0.05, 0.12))
             answers = self.client.get_hover_texts()
             if any(self.text_matches(a, w) for a in answers for w in hovers):
                 click(-1, -1)
@@ -654,7 +680,7 @@ class BotExecutor(Bot):
             if menu_tried < 2 and any(a.strip() for a in answers):
                 menu_tried += 1
                 click(-1, -1, click_type=ClickType.RIGHT)
-                time.sleep(random.uniform(0.25, 0.45))
+                time.sleep(random.uniform(0.15, 0.3))
                 if self.menu_pick(hovers):
                     return True
                 self._close_menu()
@@ -662,7 +688,7 @@ class BotExecutor(Bot):
         x, y = pts[min(2, len(pts) - 1)]
         self.client.move_to((x, y), rand_move_chance=0)
         click(-1, -1, click_type=ClickType.RIGHT)
-        time.sleep(random.uniform(0.25, 0.45))
+        time.sleep(random.uniform(0.15, 0.3))
         if self.menu_pick(hovers):
             return True
         self._close_menu()
@@ -707,7 +733,7 @@ class BotExecutor(Bot):
         self.client.move_to(inner.get_point_within(), rand_move_chance=0)
         # the cursor is on the tile now: open the menu there
         click(-1, -1, click_type=ClickType.RIGHT)
-        time.sleep(random.uniform(0.25, 0.45))
+        time.sleep(random.uniform(0.15, 0.3))
         if self.menu_pick(hovers):
             return True
         # nothing wanted there: the game closes the menu when the mouse moves away from it
@@ -742,7 +768,7 @@ class BotExecutor(Bot):
         """Move into `rect` (centre-weighted), click only if the mouse-over text is one of `wanted`."""
         for _ in range(tries):
             self.client.move_to(rect.get_point_within(), rand_move_chance=0)
-            time.sleep(random.uniform(0.1, 0.22))
+            time.sleep(random.uniform(0.05, 0.12))
             answers = self.client.get_hover_texts()
             if any(self.text_matches(a, w) for a in answers for w in wanted):
                 click(-1, -1, click_type=click_type or ClickType.LEFT)
@@ -789,48 +815,64 @@ class BotExecutor(Bot):
         if not names:
             return
         wanted = [f"* {n}" for n in names]  # the left-click action is the use; check the name
-        used, skipped = 0, 0
-        for _ in range(28):
+        used = 0
+        # one look at the inventory, then use them one after another (the slots don't
+        # move when an item goes); a missed one is caught on the next call
+        try:
+            items = self.client.get_inv_items(names, min_confidence=0.85)
+        except Exception as e:
+            self.log.debug(f"Inventory check failed: {e}")
+            items = []
+        for i, m in enumerate(items):
             if self.terminate:
                 break
-            try:
-                items = self.client.get_inv_items(names, min_confidence=0.85)
-            except Exception as e:
-                self.log.debug(f"Inventory check failed: {e}")
-                break
-            if len(items) <= skipped:
-                break
-            m = items[skipped]
             if not self.hover_click(m.scale_px(-6), wanted, tries=3):
                 self.log.debug("Inventory item's mouse-over didn't match; trying the next one")
-                skipped += 1
                 continue
             used += 1
-            time.sleep(self.cfg.use_delay.choose())
+            if i < len(items) - 1:
+                time.sleep(self.cfg.use_delay.choose())
         if used:
             self.log.info(f"Used {used} item(s) ({', '.join(names)})")
 
-    def _cant_reach_count(self) -> int:
-        """How many "I can't reach that!" lines the chat box shows (fenced-off monster)."""
+    def _chat_image(self):
+        """The chat box as it is now (cheap; only OCR'd if a fight doesn't start)."""
         try:
-            text = self.client.get_chat_text().lower()
+            return self.client.sectors.chat.crop_in(self.client.get_screenshot())
         except Exception:
-            return -1
+            return None
+
+    def _reach_count(self, img) -> int:
+        """How many "I can't reach that!" lines a chat box image shows."""
+        if img is None:
+            return 10 ** 6  # unknown: never claim a new one
+        try:
+            text = ocr.execute(img, font=ocr.FontChoice.RUNESCAPE_PLAIN_12, psm=ocr.TessPsm.SPARSE_TEXT,
+                               raise_on_blank=False, preprocess=True).lower()
+        except Exception:
+            return 10 ** 6
         return text.count("reach that") + text.count("reach tha!")
 
-    def _wait_fight_start(self, reach_before: int = -1) -> bool:
+    def _cant_reach_count(self) -> int:
+        """How many "I can't reach that!" lines the chat box shows (fenced-off monster)."""
+        img = self._chat_image()
+        return -1 if img is None else self._reach_count(img)
+
+    def _wait_fight_start(self, reach_before=None) -> bool:
         deadline = time.time() + float(self.cfg.attack_start_timeout.value)
-        time.sleep(random.uniform(0.5, 0.9))
+        time.sleep(random.uniform(0.3, 0.5))
         checks = 0
         while time.time() < deadline and not self.terminate:
             if self.fight_state() == "fighting":
-                self.log.info("Fighting")
+                idle = time.time() - getattr(self, "_t_idle", time.time())
+                self._t_fight_start = time.time()
+                self.log.info(f"Fighting ({idle:.1f}s after the last kill)" if self.kills else "Fighting")
                 return True
             checks += 1
-            if reach_before >= 0 and checks in (1, 3) and self._cant_reach_count() > reach_before:
+            if reach_before is not None and checks in (3, 6) and self._cant_reach_count() > self._reach_count(reach_before):
                 self.log.info("\"I can't reach that!\" - it's behind a fence")
                 return False
-            time.sleep(random.uniform(0.3, 0.6))
+            time.sleep(random.uniform(0.2, 0.35))
         return False
 
 

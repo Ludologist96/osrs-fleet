@@ -1187,14 +1187,29 @@ class RuneLiteClient(GenericWindow):
         if sys.platform.startswith('linux'):
             # The X connection and mss aren't safe to share between threads,
             # so read both hover sources one after the other.
+            # The bottom-left hover panel is often absent on the fleet: its template match
+            # then fails every time and costs time on each mouse-over. After 3 misses in a
+            # row only retry it every 20th call (the mouse-over text plugin still runs).
             out = []
-            for fn, label in ((self.get_hover_text, "hover_text"),
-                              (self.get_action_hover, "action_hover")):
+            fails = getattr(self, "_hover_panel_fails", 0)
+            calls = getattr(self, "_hover_calls", 0) + 1
+            self._hover_calls = calls
+            if fails < 3 or calls % 20 == 0:
                 try:
-                    out.append(fn() or '')
+                    out.append(self.get_hover_text() or '')
+                    self._hover_panel_fails = 0
                 except Exception as e:
-                    self.log.error("[%s] %s", label, e, exc_info=True)
+                    self._hover_panel_fails = fails + 1
+                    if fails < 3:
+                        self.log.debug("[hover_text] %s", e)
                     out.append('')
+            else:
+                out.append('')
+            try:
+                out.append(self.get_action_hover() or '')
+            except Exception as e:
+                self.log.error("[action_hover] %s", e, exc_info=True)
+                out.append('')
             return out
         
 

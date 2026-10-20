@@ -362,6 +362,8 @@ class BotManagerService:
         try:
             if self.current_bot:
                 log.info(f"Stopping currently running bot: {self.current_bot.bot_id}")
+                # replaced by a new bot right away: stay logged in
+                self.current_bot.executor.logout_on_stop = False
                 self.stop_bot(self.current_bot.bot_id)
             # The new bot's Bot.__init__ resets the shared ScriptControl (terminate=False).
             # A stopped bot whose thread is still sleeping (e.g. resting for HP) would then
@@ -383,10 +385,17 @@ class BotManagerService:
 
             def _run_bot(executor=bot_executor, bid=bot_id):
                 try:
+                    if hasattr(executor, "_start_view"):
+                        executor._start_view()  # inventory tab + home camera view
                     executor.start()
                 except Exception:
                     import traceback
                     log.error(f"Bot {bid} raised an unhandled exception:\n{traceback.format_exc()}")
+                finally:
+                    # stopped by the user / the launcher's timer (not when it ended by itself)
+                    control = getattr(executor, "control", None)
+                    if control is not None and control.terminate and hasattr(executor, "logout_after_stop"):
+                        executor.logout_after_stop()
 
             bot_thread = threading.Thread(target=_run_bot, daemon=True)
             bot_thread.start()
