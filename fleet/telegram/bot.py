@@ -146,6 +146,23 @@ def send_photo(jpeg: bytes, caption: str = "", keyboard=None):
 
 # ------------------------------------------------------------------ dashboard
 
+LAUNCHER_URL = "http://localhost:8000/launcher"
+WIN_CMD = "/mnt/c/Windows/System32/cmd.exe"
+
+
+def open_launcher_on_pc() -> str:
+    """Open the launcher page in the browser on the home PC's desktop (WSL interop),
+    so the account screens are visible there. Returns a short status line."""
+    try:
+        import subprocess
+        subprocess.run([WIN_CMD, "/c", "start", "", LAUNCHER_URL],
+                       check=True, timeout=20, capture_output=True)
+        return "🖥 Launcher opened on the PC."
+    except Exception as e:  # noqa: BLE001 - report to the owner, keep the bot running
+        say(f"open launcher on PC failed: {e!r}")
+        return "🖥 Couldn't open the launcher on the PC (is the PC on and logged in?)."
+
+
 def dash(path: str, body: dict | None = None, timeout: float = 20, raw: bool = False):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(DASH + path, data=data, method="POST" if body is not None else "GET",
@@ -587,11 +604,14 @@ def handle(text: str):
         only = None
         if t.startswith("/shot "):
             only = sorted(parse_slots(t[6:], set(range(1, 33))) or []) or None
+        opened = open_launcher_on_pc()
         pic = screens_picture(only)
         if not pic:
-            return "No screens to show (no account logged in).", MENU
-        send_photo(pic[0], pic[1], keyboard=MENU)
+            return f"{opened}\nNo screens to show (no account logged in).", MENU
+        send_photo(pic[0], f"{pic[1]}\n{opened}", keyboard=MENU)
         return None, MENU
+    if t in ("/launcher", "/view"):
+        return open_launcher_on_pc(), MENU
     if t in (B_STOP, "/stop"):
         k = stop_keyboard()
         if not k:
@@ -622,10 +642,10 @@ def handle(text: str):
 HELP = """OSRS fleet bot - buttons:
 🚀 Start bots: accounts → bot → run time → spread → Start
 🧭 Free roam: log accounts in without a bot
-📊 Status · 📸 Screens · ⏹ Stop
+📊 Status · 📸 Screens (also opens the launcher on the PC) · ⏹ Stop
 ⋯ More: Resources, Clear finished, Update code
 
-Also: /status  /shot 3  /stop all  /stats  /update
+Also: /status  /shot 3  /launcher  /stop all  /stats  /update
 I message you when a run finishes, a bot stops on its own, or a login fails."""
 
 # ------------------------------------------------------------------ alerts
