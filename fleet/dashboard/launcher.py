@@ -331,6 +331,43 @@ class Launcher:
         with _lock:
             return self.runs.get(str(n), {}).get("status") != "starting"
 
+    def _fresh_client(self, n: int, rl_change: dict | None = None):
+        """Restart RuneLite on a random F2P world. A fresh start also downloads the
+        newest RuneLite client, which is needed after a game update: a client opened
+        before the update can't log in any more."""
+        world = random.choice(f2p_worlds())
+        self._set(n, msg=f"restarting RuneLite on world {world}", world=world)
+        subprocess.run(["systemctl", "stop", f"osrs-client@{n}.service"], capture_output=True)
+        if not set_login_world(n, world):
+            raise RuntimeError("RuneLite settings not found for this slot")
+        if rl_change:
+            set_rl_settings(n, rl_change, all_profiles=False)
+        subprocess.run(["systemctl", "start", f"osrs-client@{n}.service"], capture_output=True)
+        time.sleep(5)
+        for _ in range(60):
+            if self.window_title(n).startswith("RuneLite - "):
+                break
+            time.sleep(3)
+        time.sleep(15)  # let the login screen finish loading
+
+    def _login(self, n: int, what: str, cancellable: bool = False):
+        """Log the slot in. If that fails, restart RuneLite (e.g. the game was updated
+        while this client was open) and try once more."""
+        st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
+        if st.get("state") == "game":
+            return
+        first = st.get("error") or st.get("state")
+        if cancellable and self._cancelled(n):
+            return
+        self._set(n, msg=f"login failed ({first}): restarting RuneLite and trying again")
+        self._fresh_client(n)
+        if cancellable and self._cancelled(n):
+            return
+        self._set(n, msg="logging in (2nd try)")
+        st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
+        if st.get("state") != "game":
+            raise RuntimeError(f"{what} ({st.get('error') or st.get('state')})")
+
     def _start(self, n: int, bot: str):
         try:
             # 1. slot running
@@ -364,27 +401,13 @@ class Launcher:
             #    random F2P world, then log in
             st = _http("GET", f"{_app(n)}/api/session/state", timeout=20)
             if st.get("state") != "game" or rl_change:
-                world = random.choice(f2p_worlds())
-                self._set(n, msg=f"switching to world {world}", world=world)
-                subprocess.run(["systemctl", "stop", f"osrs-client@{n}.service"], capture_output=True)
-                changed = set_login_world(n, world)
-                if not changed:
-                    raise RuntimeError("RuneLite settings not found for this slot")
-                if rl_change:
-                    set_rl_settings(n, rl_change, all_profiles=False)
-                subprocess.run(["systemctl", "start", f"osrs-client@{n}.service"], capture_output=True)
-                time.sleep(5)
-                for _ in range(60):
-                    if self.window_title(n).startswith("RuneLite - "):
-                        break
-                    time.sleep(3)
-                time.sleep(15)  # let the login screen finish loading
+                self._fresh_client(n, rl_change)
             if self._cancelled(n):
                 return
             self._set(n, msg="logging in")
-            st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
-            if st.get("state") != "game":
-                raise RuntimeError(f"couldn't get into the game ({st.get('error') or st.get('state')})")
+            self._login(n, "couldn't get into the game", cancellable=True)
+            if self._cancelled(n):
+                return
             # 4. start the bot with this slot's saved settings (unless Stop was pressed meanwhile)
             if self._cancelled(n):
                 return
@@ -415,9 +438,7 @@ class Launcher:
 
     def _resume(self, n: int, bot: str):
         try:
-            st = _http("POST", f"{_app(n)}/api/session/login", timeout=150)
-            if st.get("state") != "game":
-                raise RuntimeError(f"couldn't get back into the game ({st.get('error') or st.get('state')})")
+            self._login(n, "couldn't get back into the game")
             cfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")
             res = _http("POST", f"{_app(n)}/api/bot/{bot}/start", {"config": cfg}, timeout=60)
             if not res.get("success"):
