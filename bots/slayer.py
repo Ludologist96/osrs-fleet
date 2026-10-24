@@ -160,7 +160,11 @@ class BotConfig(BotConfigMixin):
     # Share of pick-ups that try the quick click first. Measured Oct 2026 on cows: with every
     # pick-up quick, pick-ups took 10-18 s and often failed (the click walks the character
     # onto the pile, the item is then hidden under it); mouse-over only: 4-6 s, all worked.
-    quick_loot_chance: FloatParam = FloatParam(0.0)
+    quick_loot_chance: FloatParam = FloatParam(0.40)  # Igor's choice (Oct 2026), misses more
+    # Same idea for burying/eating and for dropping junk: share of clicks without the
+    # mouse-over check (the rest check it first).
+    quick_use_chance: FloatParam = FloatParam(0.40)
+    quick_drop_chance: FloatParam = FloatParam(0.40)
     # After a click, sometimes a short extra pause.
     micro_idle_chance: FloatParam = FloatParam(0.07)
     micro_idle: RangeParam = RangeParam(0.25, 0.9)
@@ -820,10 +824,11 @@ class BotExecutor(HumanMixin, Bot):
         for r in sorted(cand, key=lambda r: (r.start_y, r.start_x)):
             if self.terminate:
                 break
-            # last check: the mouse-over must not name an item we want (e.g. "Bury Bones")
             self.client.move_to(r.scale_px(-6).get_point_within())
             time.sleep(random.uniform(0.08, 0.15))
-            texts = self.client.get_hover_texts()
+            # sometimes drop at once; otherwise the mouse-over must show an item and must not
+            # name one we want (e.g. "Bury Bones")
+            texts = ["?"] if random.random() < self.cfg.quick_drop_chance.value else self.client.get_hover_texts()
             if not any((t or "").strip() for t in texts):
                 # nothing under the mouse: an empty slot that looked used (a tooltip over it)
                 self.log.debug("Slot looks empty on mouse-over: not dropping")
@@ -1244,11 +1249,15 @@ class BotExecutor(HumanMixin, Bot):
         except Exception as e:
             self.log.debug(f"Inventory check failed: {e}")
             items = []
-        # quick pass: the slots don't move when an item goes
+        # one pass (the slots don't move when an item goes): some plain clicks, some
+        # mouse-over-checked; then one more look for leftovers
         for i, m in enumerate(items):
             if self.terminate:
                 break
-            self.client.click(m.scale_px(-6))
+            if random.random() < self.cfg.quick_use_chance.value:
+                self.client.click(m.scale_px(-6))
+            elif not self.hover_click(m.scale_px(-6), wanted, tries=2):
+                self.log.debug("Inventory item's mouse-over didn't match")
             if i < len(items) - 1:
                 time.sleep(self.cfg.use_delay.choose())
         if items:
