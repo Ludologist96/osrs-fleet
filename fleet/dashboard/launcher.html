@@ -403,6 +403,7 @@ const FORMS = {
       note: 'Banking walks the saved bank route (default: Draynor willows ↔ Draynor bank).' },
     { k: 'tree', label: 'Trees to cut', kind: 'tree' },
     { k: 'burn_logs', label: 'Firemaking: light the logs right away (tinderbox)', kind: 'bool' },
+    { k: 'home_max_tiles', label: 'Firemaking: walk back to the trees when more than N tiles away', kind: 'int' },
     { k: 'max_trees_before_forced_break', label: 'Short break after N trees without one (0 = off)', kind: 'int' },
   ],
   slayer: [
@@ -414,6 +415,8 @@ const FORMS = {
     { k: 'min_hp', label: 'Rest below HP %', kind: 'int' },
     { k: 'resume_hp', label: 'Fight again at HP %', kind: 'int' },
     { k: 'max_kills_before_forced_break', label: 'Short break after N kills without one', kind: 'int' },
+    { k: 'return_home', label: 'Walk back to the start area when it wandered off', kind: 'bool' },
+    { k: 'home_max_tiles', label: 'Walk back after a kill when more than N tiles away', kind: 'int' },
   ],
 };
 let cfgSlots = [], cfgBot = '', cfgLoaded = null;

@@ -112,6 +112,12 @@ class BotConfig(BotConfigMixin):
     use_check_every: IntParam = IntParam(3)  # every N kills also look for `loot_use` items left in the inventory
     loot_zoom_notches: IntParam = IntParam(2)      # item not found: zoom in this much, try again, zoom back
 
+    # --- stay in the start area ---
+    return_home: BooleanParam = BooleanParam(True)  # walk back when it wandered off (chasing, loot)
+    home_max_tiles: FloatParam = FloatParam(10.0)   # after a kill: farther than this -> walk back
+    home_idle_tiles: FloatParam = FloatParam(4.0)   # nothing to attack: farther than this -> walk back
+    home_match: FloatParam = FloatParam(0.45)       # minimap match needed to find the start area
+
     # --- nothing to attack ---
     no_target_wait: RangeParam = RangeParam(0.8, 2.2)
     max_no_target: IntParam = IntParam(40)  # stop after this many empty looks in a row
@@ -234,6 +240,12 @@ class BotExecutor(HumanMixin, Bot):
                       f"loot {list(self.cfg.loot_use.value) + list(self.cfg.loot_keep.value) if self.cfg.loot.value else 'off'}")
         self.human_init()
         self.set_activity("looking for a target")
+        if self.cfg.return_home.value:
+            try:
+                if self.remember_home():
+                    self.log.info("Remembered the minimap around the start area")
+            except Exception:
+                self.log.warning("Couldn't remember the start area", exc_info=True)
         try:
             self.drop_junk()  # e.g. cowhides left from earlier runs
             while not self.terminate:
@@ -312,6 +324,10 @@ class BotExecutor(HumanMixin, Bot):
                     self._on_kill(time.time(), saw_death=False)
             return
         self.no_target += 1
+        # nothing to attack here: if it wandered off, back to where the monsters are
+        if self.cfg.return_home.value and self.no_target >= 2 \
+                and self.go_home(max_tiles=self.cfg.home_idle_tiles.value):
+            return
         # nothing to attack around here: a good moment to wander a few steps
         if self.no_target >= 2 and self.maybe_walk_away(prefer=True):
             return
@@ -572,6 +588,8 @@ class BotExecutor(HumanMixin, Bot):
         time.sleep(self.cfg.after_kill_delay.choose())
         self.note_action()
         self.maybe_forced_break("max_kills_before_forced_break")
+        if self.cfg.return_home.value:
+            self.go_home(max_tiles=self.cfg.home_max_tiles.value)
         self.maybe_walk_away()
         self._t_idle = time.time()
 

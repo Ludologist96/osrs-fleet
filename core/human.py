@@ -5,6 +5,7 @@ Player-like habits shared by the woodcutter and the slayer bot (Igor's TODO, Oct
   window (the RuneLite window loses the focus) for a few seconds, sometimes longer,
   then come back and look at what the character is doing;
 - walk-away: after a finished cycle, now and then take a few steps via the minimap;
+- home area: remember the minimap at the start, walk back when the bot wandered off;
 - micro-idle: a short extra pause after a click;
 - misclick: rarely click a little next to the target, then click the target again;
 - a forced camera fidget when none happened for a while;
@@ -248,6 +249,84 @@ class HumanMixin:
         self.client.click(pt)
         self.log.info(f"{label}: {tiles:.0f} tiles via the minimap (clicked {pt})")
         return pt
+
+    # ------------------------------------------------------------ home area
+    # Remember the minimap around the start area and walk back when the bot wandered off
+    # (firemaking steps, chasing monsters, loot). The minimap turns with the camera, so the
+    # remembered patch is also tried rotated: works whatever way the camera faces now.
+    HOME_R = 21      # px radius kept (the rotated 30x30 core always fits inside it)
+    HOME_PATCH = 15  # px half-size of the patch matched (~7 tiles across)
+    HOME_ANGLE_STEP = 6  # degrees between the tried rotations
+
+    def _minimap_full(self):
+        """(grey minimap image, its top-left in window coords, centre in window coords)."""
+        import numpy as np
+        sc = self.client.get_screenshot()
+        mm = self.client.minimap.map
+        x1, y1, x2, y2 = mm.bounding_box
+        cx, cy = mm.get_center()
+        return np.asarray(sc.convert("L").crop((x1, y1, x2, y2)), dtype=np.float32), (x1, y1), (cx, cy)
+
+    def remember_home(self) -> bool:
+        """The character stands in its work area: remember the minimap around it."""
+        img, (x1, y1), (cx, cy) = self._minimap_full()
+        r = self.HOME_R
+        px, py = int(cx - x1), int(cy - y1)
+        patch = img[py - r:py + r, px - r:px + r]
+        if patch.shape != (2 * r, 2 * r):
+            return False
+        self._home_patch = patch.copy()
+        return True
+
+    def find_home(self, rotations: bool = True):
+        """Where the remembered area is on the minimap now: ((x, y) window coords,
+        px from the player), or None (nothing remembered / not on the minimap)."""
+        import cv2
+        home = getattr(self, "_home_patch", None)
+        if home is None:
+            return None
+        img, (x1, y1), (cx, cy) = self._minimap_full()
+        r, h = self.HOME_R, self.HOME_PATCH
+        best = (-1.0, None)
+        angles = range(0, 360, self.HOME_ANGLE_STEP) if rotations else (0,)
+        for a in angles:
+            if a:
+                m = cv2.getRotationMatrix2D((r - 0.5, r - 0.5), a, 1.0)
+                rot = cv2.warpAffine(home, m, (2 * r, 2 * r), flags=cv2.INTER_LINEAR)
+            else:
+                rot = home
+            tpl = rot[r - h:r + h, r - h:r + h]
+            res = cv2.matchTemplate(img, tpl, cv2.TM_CCOEFF_NORMED)
+            _, score, _, loc = cv2.minMaxLoc(res)
+            if score > best[0]:
+                best = (score, loc)
+        score, loc = best
+        if loc is None or score < float(_v(self.cfg, "home_match", 0.45)):
+            self.log.debug(f"Start area not found on the minimap (best match {score:.2f})")
+            return None
+        hx, hy = x1 + loc[0] + h, y1 + loc[1] + h
+        return (hx, hy), math.hypot(hx - cx, hy - cy)
+
+    def go_home(self, max_tiles: float = 1.0, rotations: bool = True) -> bool:
+        """Walk back toward the remembered area if it is more than `max_tiles` away.
+        Too far for one minimap click: click the minimap edge that way (look again later)."""
+        found = self.find_home(rotations)
+        if not found:
+            return False
+        (hx, hy), dist = found
+        if dist < max(4.0, max_tiles * self.MINIMAP_PX_PER_TILE):
+            return False
+        self.log.info(f"Back to the start area: {dist / self.MINIMAP_PX_PER_TILE:.0f} tiles away")
+        mm = self.client.minimap.map
+        cx, cy = mm.get_center()
+        rad = min(mm.width, mm.height) / 2 - 10
+        if dist > rad:
+            hx, hy = cx + (hx - cx) * rad / dist, cy + (hy - cy) * rad / dist
+        self.set_activity("walking")
+        self.client.click((int(hx + random.uniform(-2, 2)), int(hy + random.uniform(-2, 2))))
+        self.sleep_checked(1.0 + min(dist, rad) / self.MINIMAP_PX_PER_TILE * 0.6 * random.uniform(0.8, 1.1))
+        self.set_activity("working")
+        return True
 
     # ------------------------------------------------------------ misclick
     def maybe_misclick(self, point: tuple[int, int], avoid=None) -> bool:
