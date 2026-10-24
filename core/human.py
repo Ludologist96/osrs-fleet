@@ -384,9 +384,12 @@ class HumanMixin:
                 texts = [t.lower().strip() for t in self.client.get_hover_texts()]
             except Exception:
                 texts = []
-            words = " ".join(texts)
-            # '' from the hover readers usually means "Walk here" too
-            if ("walk" in words or not words) and not any(w in words for w in ("chop", "fire", "attack", "take", "talk", "use ")):
+            words = " ".join(texts).strip()
+            # "Walk here" often reads as '' or a few junk letters; anything else names a
+            # thing under the mouse ("Chop down Tree", "Examine Fire"): a real word of 4+ letters
+            import re as _re
+            names = [w for w in _re.findall(r"[a-z]{4,}", words) if w not in ("walk", "here")]
+            if not names:
                 press()
                 self.log.info(f"Step aside: clicked the ground next to the character at {pt}")
                 time.sleep(random.uniform(0.9, 1.3))
