@@ -242,4 +242,4 @@ class Bot:
 
     @terminate.setter
     def terminate(self, value: bool):
-        self.control.terminate = value
+        self.control.terminate = value

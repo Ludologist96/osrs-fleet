@@ -443,7 +443,8 @@ class Launcher:
                 r = self.runs[str(n)]
                 r["stop_at"] = time.time() + (r["stop_at"] - r["start_at"])
                 where = f" on world {r['world']}" if r.get("world") else ""
-                r.update(status="running", msg=f"{bot} running{where}", began_at=time.time(), counts={})
+                r.update(status="running", msg=f"{bot} running{where}", began_at=time.time(), counts={},
+                         counts_raw={}, counts_base={})
                 self._save()
         except Exception as e:
             if not self._cancelled(n):
@@ -484,15 +485,24 @@ class Launcher:
             if info.get("activity"):
                 r["activity_now"] = info["activity"]
             c = info.get("counts")
-            if isinstance(c, dict) and c and c != r.get("counts"):
-                r["counts"] = c
+            if isinstance(c, dict) and c != r.get("counts_raw"):
+                raw = r.get("counts_raw") or {}
+                if sum(c.values()) < sum(raw.values()):
+                    # the bot was restarted (update / crash): its counters start again at 0
+                    base = r.get("counts_base") or {}
+                    r["counts_base"] = {k: base.get(k, 0) + raw.get(k, 0) for k in set(base) | set(raw)}
+                r["counts_raw"] = c
+                base = r.get("counts_base") or {}
+                r["counts"] = {k: base.get(k, 0) + c.get(k, 0) for k in set(base) | set(c)}
                 self._save()
 
     def _final_counts(self, n: int, r: dict):
         """Before stopping a bot: keep its last counters and how long it ran."""
         info = self._bot_info(n, r["bot"])
         if info and isinstance(info.get("counts"), dict) and info["counts"]:
-            r["counts"] = info["counts"]
+            base = r.get("counts_base") or {}
+            c = info["counts"]
+            r["counts"] = {k: base.get(k, 0) + c.get(k, 0) for k in set(base) | set(c)}
         r["ran_s"] = time.time() - r.get("began_at", r["start_at"])
 
     def _bot_info(self, n: int, bot: str) -> dict | None:
