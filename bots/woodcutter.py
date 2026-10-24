@@ -421,7 +421,7 @@ class BotExecutor(HumanMixin, Bot):
             for m in skip:
                 sc = m.remove_from(sc)
             match = tools.find_color_box(sc, color.value, tol=40)  # raises when none left
-            inner = match.scale_px(-max(2, min(match.width, match.height) // 6))
+            inner = match  # the clickbox outline (a polygon): aim inside it
             if random.random() < self.cfg.skip_hover_chance.value:
                 if self._instant_click(inner):
                     self._after_click(inner)
