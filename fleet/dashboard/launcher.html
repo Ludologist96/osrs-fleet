@@ -189,7 +189,7 @@ const KIND = (a) => { a = (a || '').toLowerCase();
   if (['done', 'stopped', 'waiting', 'starting', 'logging in', 'restarting', ''].includes(a)) return 'idle';
   return 'good'; };
 const chip = (a) => { const c = document.createElement('span'); c.className = 'act k-' + KIND(a); c.textContent = a || '–'; return c; };
-const COUNT = { logs: 'logs', banked: 'banked', dropped: 'dropped', kills: 'kills', loot: 'loot', buried: 'buried', used: 'used' };
+const COUNT = { burned: 'burned', logs: 'logs', banked: 'banked', dropped: 'dropped', kills: 'kills', loot: 'loot', buried: 'buried', used: 'used' };
 function countsText(r) {
   const c = r.counts || {}; const began = r.began_at || r.start_at; const secs = r.ran_s || (Date.now() / 1000 - began);
   const h = secs / 3600;
@@ -402,6 +402,7 @@ const FORMS = {
     { k: 'drop_items', label: 'Logs when the inventory is full', kind: 'select', opts: [['true', 'Drop them'], ['false', 'Bank them']],
       note: 'Banking walks the saved bank route (default: Draynor willows ↔ Draynor bank).' },
     { k: 'tree', label: 'Trees to cut', kind: 'tree' },
+    { k: 'burn_logs', label: 'Firemaking: light the logs right away (tinderbox)', kind: 'bool' },
     { k: 'max_trees_before_forced_break', label: 'Short break after N trees without one (0 = off)', kind: 'int' },
   ],
   slayer: [

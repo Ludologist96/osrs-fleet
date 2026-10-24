@@ -93,11 +93,22 @@ class BotConfig(BotConfigMixin):
     # Drop mode: never drop these (an axe carried in the inventory).
     keep_items: StringListParam = StringListParam([
         "Bronze axe", "Iron axe", "Steel axe", "Black axe", "Mithril axe", "Adamant axe", "Rune axe",
+        "Tinderbox",
     ])
     # After clicking a tree, wait up to this long (seconds) for chopping to start,
     # e.g. while the character walks there, before clicking anything else.
     chop_start_timeout: FloatParam = FloatParam(11.0)
     drop_items: BooleanParam = BooleanParam(False)  # True = drop logs, False = bank logs
+    # Firemaking: after each tree, light the logs right away (left-click the tinderbox, then
+    # a log). The character steps aside after each fire; where a fire can't be lit (a fire
+    # already there, a blocked tile) it walks a few tiles and tries again.
+    burn_logs: BooleanParam = BooleanParam(False)
+    tinderbox: ItemParam = ItemParam("Tinderbox")
+    fire_timeout: FloatParam = FloatParam(12.0)        # s for one log to catch fire (low level: several tries)
+    fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
+    fire_move_tiles: RangeParam = RangeParam(1, 3)
+    fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
+    fire_step_wait: RangeParam = RangeParam(0.7, 1.3)    # after a fire: the character steps aside
     bank_tile: RGBParam = RGBParam(0, 255, 0)  # Green by default, only used when banking
     bank_to_trees: RouteParam = RouteParam([
         # WaypointParam(3094, 3244, 0, 790933, 8),
@@ -198,6 +209,9 @@ class BotExecutor(HumanMixin, Bot):
                 
                 # Check if we're woodcutting, if not, click on tree
                 if not self.client.is_woodcutting:
+                    # firemaking: the tree fell - light the logs first
+                    if self.cfg.burn_logs.value:
+                        self.burn_logs()
                     try:
                         self.log.info("Not woodcutting. Clicking tree...")
                         self.set_activity("working")
@@ -426,6 +440,123 @@ class BotExecutor(HumanMixin, Bot):
         return False
 
     # ------------------------------------------------------------------ inventory
+    # ------------------------------------------------------------------ firemaking
+    def _inv(self, name: str) -> list[MatchResult]:
+        try:
+            return self.client.get_inv_items([name], min_confidence=0.9)
+        except ScriptTerminationException:
+            raise
+        except Exception:
+            return []
+
+    def _hover_has(self, *words: str) -> bool:
+        """The mouse-over text names all these words (OCR-tolerant: a word may lose a letter)."""
+        from difflib import SequenceMatcher
+        texts = [t.lower() for t in self.client.get_hover_texts() if t]
+        def has(t, w):
+            if w in t:
+                return True
+            return any(SequenceMatcher(None, tok, w).ratio() >= 0.75 for tok in t.replace(">", " ").split())
+        ok = any(all(has(t, w.lower()) for w in words) for t in texts)
+        if not ok:
+            self.log.debug(f"Mouse-over {texts} doesn't name {words}")
+        return ok
+
+    def _use_tinderbox_on(self, tinder: MatchResult, log: MatchResult) -> bool:
+        """Left-click the tinderbox, then the log. Sometimes without reading the mouse-over
+        first (skip_hover_chance). No double clicks here: a second click would select the log."""
+        quick = random.random() < self.cfg.skip_hover_chance.value
+        t_rect = tinder.scale_px(-6)
+        if quick:
+            self.client.click(t_rect)
+        else:
+            self.client.move_to(t_rect.get_point_within())
+            time.sleep(random.uniform(0.06, 0.14))
+            if not self._hover_has("tinderbox"):
+                return False
+            from core.input.mouse_control import press
+            press()
+        time.sleep(self.cfg.fire_click_gap.choose())
+        l_rect = log.scale_px(-6)
+        quick = random.random() < self.cfg.skip_hover_chance.value
+        if quick:
+            self.client.click(l_rect)
+            return True
+        self.client.move_to(l_rect.get_point_within())
+        time.sleep(random.uniform(0.06, 0.14))
+        if not self._hover_has("tinderbox", "log"):
+            # tinderbox still selected: click it again to put it down
+            self.client.click(t_rect)
+            return False
+        from core.input.mouse_control import press
+        press()
+        return True
+
+    def _wait_lit(self, name: str, before: int) -> bool:
+        """Wait until a log is gone from the inventory (the fire is lit). Meanwhile maybe
+        alt-tab (1-2 s after the click), like while chopping."""
+        t0 = time.time()
+        deadline = t0 + float(self.cfg.fire_timeout.value)
+        tabbed = False
+        while time.time() < deadline and not self.terminate:
+            time.sleep(random.uniform(0.4, 0.7))
+            if len(self._inv(name)) < before:
+                return True
+            if not tabbed and time.time() - t0 >= random.uniform(1.0, 2.0):
+                tabbed = True
+                if self.maybe_alt_tab(lambda: len(self._inv(name)) >= before, "fire lighting"):
+                    deadline = max(deadline, time.time() + 3)
+        return False
+
+    def burn_logs(self) -> int:
+        """Light every log in the inventory, one after another."""
+        name = self.cfg.log_type.name
+        burned = 0
+        for _ in range(28):
+            if self.terminate:
+                break
+            logs = self._inv(name)
+            if not logs:
+                break
+            tinder = self._inv(self.cfg.tinderbox.name)
+            if not tinder:
+                self.log.error("No tinderbox in the inventory: can't light the logs")
+                return burned
+            self.set_activity("firemaking")
+            lit = False
+            for attempt in range(1 + int(self.cfg.fire_moves.value)):
+                if self.terminate:
+                    break
+                log = random.choice(logs[:3])  # not always the first one
+                if not self._use_tinderbox_on(tinder[0], log):
+                    self.log.debug("Tinderbox/log mouse-over didn't match; trying again")
+                    time.sleep(random.uniform(0.3, 0.7))
+                    continue
+                self.micro_idle()
+                if self._wait_lit(name, len(logs)):
+                    lit = True
+                    break
+                # no fire: something is already burning here or the tile is blocked
+                tiles = self.cfg.fire_move_tiles.choose()
+                self.log.info(f"Couldn't light a fire here: moving {tiles:.0f} tile(s) "
+                              f"({attempt + 1}/{1 + int(self.cfg.fire_moves.value)})")
+                self.set_activity("walking")
+                self.minimap_step(tiles)
+                time.sleep(random.uniform(0.8, 1.4) + tiles * 0.5)
+                self.set_activity("firemaking")
+                logs = self._inv(name) or logs
+            if not lit:
+                self.log.warning("Gave up lighting this log")
+                break
+            burned += 1
+            self.count("burned")
+            self.log.info(f"Fire lit ({self.counts.get('burned', 0)} so far)")
+            time.sleep(self.cfg.fire_step_wait.choose())  # the character steps off the fire
+            self.control.propose_break()
+        self._last_used = None
+        self.set_activity("working")
+        return burned
+
     def check_inventory_full(self):
         """Full = every inventory slot holds something (logs, gems, anything)."""
         try:

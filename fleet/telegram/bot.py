@@ -221,7 +221,7 @@ ACT_ICON = {
     "walking to bank": "🚶", "walking to trees": "🚶", "walking": "🚶", "dropping": "🗑",
     "roaming": "🚶", "alt tab": "🪟", "short pause": "☕", "long pause": "😴", "paused": "⏸",
     "resting": "❤️", "searching": "🔎", "looking for a target": "🔎", "waiting for trees": "🌳",
-    "logging in": "🔑", "free roam": "🧭", "restarting": "🔁",
+    "logging in": "🔑", "firemaking": "🔥", "free roam": "🧭", "restarting": "🔁",
 }
 # colours for the labels on the screens picture (same idea as the launcher page)
 ACT_COLOR = {
@@ -244,7 +244,7 @@ def act_kind(a: str) -> str:
     return "good"
 
 
-COUNT_NAMES = {"logs": "logs cut", "banked": "logs banked", "dropped": "dropped",
+COUNT_NAMES = {"burned": "logs burned", "logs": "logs cut", "banked": "logs banked", "dropped": "dropped",
                "kills": "kills", "loot": "loot picked up", "buried": "bones buried", "used": "items used"}
 
 
