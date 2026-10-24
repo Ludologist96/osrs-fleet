@@ -146,8 +146,12 @@ class BotConfig(BotConfigMixin):
     # Sometimes attack without waiting for the mouse-over text (checked after).
     skip_hover_chance: FloatParam = FloatParam(0.40)
     skip_hover_check: RangeParam = RangeParam(0.9, 1.4)    # s until "is it fighting?"
-    # Loot / bury: click at once, check after this long; only then the mouse-over way.
+    # Bury/eat: click at once, check after this long; only then the mouse-over way.
     instant_check: RangeParam = RangeParam(0.6, 1.1)
+    # Loot: the same quick click on the pile first. A plain click takes the TOP item of a
+    # pile (cows: cowhide/raw beef can lie over the bones): a wrong item is dropped again,
+    # and after 2 wrong ones the quick click stops for the rest of the run.
+    quick_loot: BooleanParam = BooleanParam(True)
     # After a click, sometimes a short extra pause.
     micro_idle_chance: FloatParam = FloatParam(0.07)
     micro_idle: RangeParam = RangeParam(0.25, 0.9)
@@ -863,17 +867,19 @@ class BotExecutor(HumanMixin, Bot):
             before_slots = self._free_slots()
             before_items = self._count_items(names)
             # first a plain click where the item should be (no mouse-over check)...
-            if self._instant_take(pts[0], before_slots, before_items, names):
+            quick = self._instant_take(pts[0], before_slots, before_items, names)
+            if quick == "ok":
                 self.looted += 1
                 self.count("loot")
                 self.log.info(f"Picked up loot with a quick click ({self.looted} so far)")
-                time.sleep(random.uniform(0.1, 0.3))
+                time.sleep(random.uniform(0.6, 0.8))  # a game tick: the taken item's highlight goes
                 continue
-            # ...not taken: look again (the character may have moved) and check the mouse-over
-            if i == 0 and before is not None:
-                pts = self._pile_points(self._loot_mask() & ~grown) or pts
-            else:
-                pts = self._pile_points(self._loot_mask(), around=self._player_point(), radius=60) or pts
+            if quick:
+                # ...not taken (it walked onto the pile, or took something else): it now stands
+                # on/next to the pile - look there, then use the mouse-over
+                time.sleep(random.uniform(0.3, 0.5))
+                before_slots = self._free_slots()
+                pts = self._pile_points(self._loot_mask(), around=self._player_point(), radius=70) or pts
             if not self._take_from_points(pts, names):
                 pts2 = self._zoom_in_for_pile(pts)
                 if not pts2 or not self._take_from_points(pts2, names):
@@ -888,6 +894,7 @@ class BotExecutor(HumanMixin, Bot):
                     self.looted += 1
                     self.count("loot")
                     self.log.info(f"Picked up loot ({self.looted} so far)")
+                    time.sleep(random.uniform(0.5, 0.7))  # a game tick: the taken item's highlight goes
                     break
             else:
                 self.log.info("Pick-up didn't happen (someone else took it?)")
@@ -897,19 +904,45 @@ class BotExecutor(HumanMixin, Bot):
         self._zoom_back()
 
     def _instant_take(self, pt: tuple[int, int], before_slots: int, before_items: int,
-                      names: list[str]) -> bool:
-        """Left-click the likeliest item spot at once, then check the inventory after
-        instant_check s. Skipped when a highlighted monster covers the spot (the click
-        would attack it)."""
+                      names: list[str]) -> str:
+        """quick_loot: left-click the likeliest item spot at once, then check the inventory
+        after instant_check s. "" = not tried, "ok" = got a wanted item, "miss" = nothing
+        taken, "wrong" = took another item (dropped again). Skipped when a highlighted
+        monster covers the spot (the click would attack it)."""
+        if not self.cfg.quick_loot.value or getattr(self, "_quick_loot_off", False):
+            return ""
         try:
             if any(t.scale_px(4).contains(*pt) for t in self.find_targets()):
                 self.log.debug("A monster covers the loot: no quick click")
-                return False
+                return ""
         except Exception:
-            return False
+            return ""
+        from core import inventory
+        self._open_inventory()
+        slots_before = {(r.start_x, r.start_y) for r in inventory.used_slots(self.client.get_screenshot())}
         self.client.click(pt)
         time.sleep(self.cfg.instant_check.choose())
-        return self._free_slots() < before_slots or self._count_items(names) > before_items
+        if self._count_items(names) > before_items:
+            return "ok"
+        new = [r for r in inventory.used_slots(self.client.get_screenshot())
+               if (r.start_x, r.start_y) not in slots_before]
+        if not new:
+            return "miss"
+        # took the top item of the pile, not a wanted one: drop it again
+        self._wrong_quick = getattr(self, "_wrong_quick", 0) + 1
+        self.log.info(f"Quick click took another item ({self._wrong_quick}x): dropping it")
+        from core.input import keys as keyboard
+        try:
+            keyboard.press("shift")
+            for r in new:
+                self.client.click(r.scale_px(-6))
+                time.sleep(random.uniform(0.15, 0.3))
+        finally:
+            keyboard.release("shift")
+        if self._wrong_quick >= 2:
+            self._quick_loot_off = True
+            self.log.info("Quick loot clicks keep taking the wrong item here: mouse-over only from now on")
+        return "wrong"
 
     def _zoom_in_for_pile(self, pts: list[tuple[int, int]]) -> list[tuple[int, int]]:
         """Items too small to hit: zoom in a little and look for the pile again
