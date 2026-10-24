@@ -331,222 +331,136 @@ def move_to(
     overshoot_prob: float = .40,
     wobble_prob:   float = .8,
     pause_prob:    float = .18,
-    curve_prob:    float = .6,
+    curve_prob:    float = .6,      # kept for callers; every move is a curve now
     overshoot_ratio=(.04, .1),
-    wobble_px=(-1, -1),  # (-1,-1)  → auto-random pair
-    curve_ratio=(.01,.25),
-
+    wobble_px=(-1, -1),
+    curve_ratio=(.01, .25),         # kept for callers
     pause_max_ms=250,
     speed: float | None = None,
-    max_direction_change=30, # max change from point to point
+    max_direction_change=30,        # kept for callers
     verify_at_end: bool = True,
     verify_tolerance: int = 3,
     verify_corrections: int = 2
 ):
-    """Smooth cursor travel with human quirks."""
+    """Human-like cursor travel along cubic Bezier curves.
+
+    Every move is ONE smooth curve from the cursor to the target (a gentle arc, sometimes
+    an S), never a straight line or joined segments with corners. With overshoot_prob the
+    curve ends a little past the target and a second, short curve comes back. The speed
+    eases in and out, varies per move, and a little hand tremor is added on the way."""
     if terminate:
         return
 
-    if wobble_px == (-1, -1):          # randomise wobble magnitude once/run
-        lo = random.randint(2, 8)
-        wobble_px = (lo, lo + random.randint(2, 8))
-
     sx, sy = _get_cursor()
-    dist0  = _euclidean((sx, sy), (tx, ty))
+    dist0 = _euclidean((sx, sy), (tx, ty))
     if dist0 < 1:
         return
 
     # one speed for this whole move (some moves quick, some lazy)
     move_speed_factor = min(1.8, max(0.6, random.lognormvariate(0, 0.28)))
+    tremor = random.uniform(0.6, 2.2) if wobble_px == (-1, -1) else float(sum(wobble_px)) / 4
 
-    # ── pick way-points  ───────────────
-    
-    waypoints: list[tuple[int, int]] = []
-    # ── curve
-    if random.random() < curve_prob and dist0 > 40:
-        midpoint = ((sx + tx) / 2, (sy + ty) / 2)
-        # determine how much off the midpoint the curve should be
-        change = (
-            random.randint(int(curve_ratio[0]*dist0), int(curve_ratio[1]*dist0)),
-            random.randint(int(curve_ratio[0]*dist0), int(curve_ratio[1]*dist0))
-        )
-        curvepoint = (
-            int( midpoint[0] + random.choice([change[0], -change[0]]) ),
-            int( midpoint[1] + random.choice([change[1], -change[1]]) ),
-        )
-        waypoints.append(curvepoint)
-
-    # ── overshoot
+    legs = []
     if random.random() < overshoot_prob and dist0 > 40:
         ux, uy = (tx - sx) / dist0, (ty - sy) / dist0
-        o_dist = dist0 * random.uniform(*overshoot_ratio)
-        waypoints.append((int(tx + ux * o_dist), int(ty + uy * o_dist)))
-    waypoints.append((tx, ty))                       # always the real target
-    last_leg = len(waypoints) - 1                   # index of final leg
+        o_dist = min(40.0, dist0 * random.uniform(*overshoot_ratio))
+        side = random.uniform(-0.4, 0.4) * o_dist            # a bit sideways too
+        over = (tx + ux * o_dist - uy * side, ty + uy * o_dist + ux * side)
+        legs.append(((sx, sy), over, True))
+        legs.append((over, (tx, ty), False))
+    else:
+        legs.append(((sx, sy), (tx, ty), True))
 
     _block(True)
     try:
-        prev = (sx, sy)
-        for leg_idx, wp in enumerate(waypoints):
-            
-            def _execute_step(prev, duration, min_steps=6):
-                step_start = time.time()
-                seg = _euclidean(prev, wp)
-                if seg < 1: return
-                
-                # More steps for smoother movement - increase minimum steps
-                # and make steps proportional to both distance and duration
-                min_steps = max(8, min_steps)
-                steps = max(min_steps, int(seg / 8))
-                
-                # Ensure we have enough steps for the given duration
-                # At least 20 steps per second for smoothness
-                min_steps_for_duration = max(min_steps, int(duration * 20))
-                steps = max(steps, min_steps_for_duration)
-                
-                # Calculate timestamps with improved easing
-                t_stamps = _smooth_steps(duration, steps)
-                
-                # Ensure minimum step time to prevent jumpy movements
-                min_step_time = 0.01  # 10ms minimum between steps
-                if not is_simulation and steps > 1:
-                    avg_step_time = duration / steps
-                    if avg_step_time < min_step_time:
-                        # Recalculate with fewer steps if moving too fast
-                        steps = max(min_steps, int(duration / min_step_time))
-                        t_stamps = _smooth_steps(duration, steps)
+        for leg_idx, (p0, p3, main) in enumerate(legs):
+            seg = _euclidean(p0, p3)
+            if seg < 1:
+                continue
+            c1, c2 = _curve_controls(p0, p3, main)
 
-                # distance decay uses this segment's full length
-                seg_total = seg
-
-                # Create more natural control point for Bezier curve
-                # Avoid extreme control point values that cause sharp curves
-                ctrl_range = min(15, seg * 0.2)  # Scale control point range with distance
-                ctrl = (
-                    _lerp(prev[0], wp[0], .33) + random.uniform(-ctrl_range, ctrl_range),
-                    _lerp(prev[1], wp[1], .33) + random.uniform(-ctrl_range, ctrl_range),
-                )
-                
-                # Track the last position to detect large jumps
-                last_pos = prev
-                start = time.perf_counter()
-                
-                for i, tgt_t in enumerate(t_stamps, 1):
-                    if terminate:
-                        return
-
-                    frac = i / steps
-                    x, y = _bezier(prev, ctrl, wp, frac)
-                    
-                    # Calculate wobble with improved probability decay
-                    # More predictable wobble effect
-                    remaining_dist = _euclidean((x, y), wp) / seg_total
-                    wobble_chance = wobble_prob * (remaining_dist ** 1.7)
-                    wobble = random.random() < wobble_chance
-
-                    # tighten wobble on the *very last* leg
-                    if leg_idx == last_leg:
-                        wobble = wobble and (random.random() < .15)
-                        wob_px = (1, 4)
-                    else:
-                        wob_px = wobble_px
-
-                    if wobble:
-                        dx, dy = wp[0] - prev[0], wp[1] - prev[1]
-                        if dx or dy:
-                            perp = (-dy, dx)
-                            norm = math.hypot(*perp) or 1.0
-                            perp = (perp[0] / norm, perp[1] / norm)
-                            a, b = perp
-                            perp = (random.choice([-a, a]), random.choice([-b, b]))
-                            # Scale wobble with remaining distance for smoother effect
-                            mag = random.randint(*wob_px) * (1 - frac)
-                            x, y = x + perp[0] * mag, y + perp[1] * mag
-                    
-                    # Apply direction constraints more smoothly
-                    x, y = _constrain_travel(
-                        _get_cursor(), (x, y), wp,
-                        max_direction_change
-                    )
-
-                    # Prevent large jumps - limit maximum pixel movement per step
-                    if not is_simulation:
-                        curr_pos = _get_cursor()
-                        step_dist = _euclidean(curr_pos, (x, y))
-                        max_step_dist = 30  # Maximum pixels per step
-                        
-                        if step_dist > max_step_dist:
-                            # Scale down the movement to avoid jumps
-                            ratio = max_step_dist / step_dist
-                            x = curr_pos[0] + (x - curr_pos[0]) * ratio
-                            y = curr_pos[1] + (y - curr_pos[1]) * ratio
-                    
-                    x = int(x)
-                    y = int(y)
-
-                    # Move to the new position (virtual-desktop aware on Windows;
-                    # pyautogui.moveTo would clamp to the primary monitor).
-                    _set_cursor(x, y)
-                    last_pos = (x, y)
-                    
-                    # Handle wobble without recursion to avoid timing issues
-                    if wobble and i < steps:
-                        # Instead of recursively calling, just continue with adjusted timing
-                        continue
-                        
-                    # occasional micro-pause
-                    if not is_simulation:
-                        if (
-                            pause_prob > 0
-                            and leg_idx == 0
-                            and .45 < frac < .55
-                            and random.random() < .10
-                        ):
-                            time.sleep(random.uniform(.03, pause_max_ms / 1000))
-                        
-                        # Improved timing control
-                        elapsed = time.perf_counter() - start
-                        sleep_time = max(0, tgt_t - elapsed)
-                        
-                        # Ensure we don't sleep too long (system might be busy)
-                        if sleep_time > 0.1:  # Cap very long sleeps
-                            sleep_time = min(sleep_time, 0.1)
-                            
-                        time.sleep(sleep_time)
-
-            # ── timing baseline (cubic ease) ─────────────────────────────────
-            step_distance = _euclidean(prev, wp)
-
-            # Ensure minimum movement time regardless of distance
-            min_duration = 0.1  # Never move faster than this many seconds
-            
+            # timing: same baseline as before, eased in and out
             if speed is not None:
-                # speed = pixels per second → duration = dist / speed
-                base_dur = step_distance / speed
+                dur = seg / speed
             else:
-                # Improved duration calculation with better lower bounds
-                base_dur = (step_distance / 700) * movement_multiplier
-                base_dur = max(0.05, min(base_dur, 0.5))  # Increased minimum from 0.03 to 0.05
-                
-            # Ensure minimum duration for very short movements
-            base_dur = max(min_duration, base_dur)
-            
-            # People don't move at one speed: each move a bit faster or slower
-            base_dur *= move_speed_factor
-            
-            # run
-            _execute_step(prev, base_dur)
-            prev = wp
-            
+                dur = max(0.05, min((seg / 700) * movement_multiplier, 0.5))
+            dur = max(0.1 if main else 0.06, dur) * move_speed_factor
+            steps = max(8, int(seg / 6), int(dur * 60))
+            t_stamps = _smooth_steps(dur, steps)
+            start = time.perf_counter()
+            nx, ny = -(p3[1] - p0[1]) / seg, (p3[0] - p0[0]) / seg  # unit normal
+            phase = random.uniform(0, 6.283)
+            for i, tgt_t in enumerate(t_stamps, 1):
+                if terminate:
+                    return
+                frac = i / steps
+                x, y = _bezier3(p0, c1, c2, p3, frac)
+                # hand tremor: small, smooth, fading out near the end of the move
+                if wobble_prob > 0 and i < steps:
+                    amp = tremor * (1 - frac) ** 1.5
+                    w = amp * math.sin(phase + frac * random.uniform(9, 14))
+                    x, y = x + nx * w, y + ny * w
+                _set_cursor(int(round(x)), int(round(y)))
+                if is_simulation:
+                    continue
+                # occasional micro-pause around the middle of the main curve
+                if (pause_prob > 0 and leg_idx == 0 and .45 < frac < .55
+                        and random.random() < .10):
+                    time.sleep(random.uniform(.03, pause_max_ms / 1000))
+                sleep_time = max(0, tgt_t - (time.perf_counter() - start))
+                time.sleep(min(sleep_time, 0.1))
+            if leg_idx < len(legs) - 1 and not is_simulation:
+                time.sleep(random.uniform(0.02, 0.09))  # notice the overshoot, come back
     finally:
-        # Post-move verification (outside the inner movement logic but while blocked)
         try:
             if verify_at_end:
                 _verify_position((tx, ty), tolerance=verify_tolerance, corrections=verify_corrections)
         except Exception as e:
-            # Never allow verification failure to break caller
             log.error(f"Mouse position verification raised unexpected error: {e}")
         _block(False)
+
+
+def _bezier3(p0, p1, p2, p3, t):
+    u = 1 - t
+    a, b, c, d = u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t
+    return (a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0],
+            a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1])
+
+
+def _curve_controls(p0, p3, main: bool = True):
+    """Two control points for a natural arc between p0 and p3: bent to one side by
+    5-25% of the distance (short moves bend less), sometimes an S-curve."""
+    dx, dy = p3[0] - p0[0], p3[1] - p0[1]
+    dist = math.hypot(dx, dy) or 1.0
+    nx, ny = -dy / dist, dx / dist
+    if main:
+        bend = dist * (random.uniform(0.05, 0.25) if dist > 60 else random.uniform(0.04, 0.15))
+    else:
+        bend = dist * random.uniform(0.05, 0.3)       # the small way back after an overshoot
+    side = random.choice((-1, 1))
+    b1 = bend * side * random.uniform(0.7, 1.3)
+    b2 = bend * side * random.uniform(0.5, 1.2)
+    if main and random.random() < 0.2:
+        b2 = -b2 * random.uniform(0.4, 0.8)          # S-curve
+    t1, t2 = random.uniform(0.2, 0.4), random.uniform(0.6, 0.8)
+    c1 = (p0[0] + dx * t1 + nx * b1, p0[1] + dy * t1 + ny * b1)
+    c2 = (p0[0] + dx * t2 + nx * b2, p0[1] + dy * t2 + ny * b2)
+    return c1, c2
+
+
+def _small_curve(target: tuple[int, int], dur: float = 0.06) -> None:
+    """A tiny curved correction move (instead of jumping the cursor)."""
+    p0 = _get_cursor()
+    seg = _euclidean(p0, target)
+    if seg < 1:
+        return
+    c1, c2 = _curve_controls(p0, target, main=False)
+    steps = max(4, int(seg / 3))
+    for i in range(1, steps + 1):
+        x, y = _bezier3(p0, c1, c2, target, i / steps)
+        _set_cursor(int(round(x)), int(round(y)))
+        time.sleep(dur / steps)
+
 
 def _verify_position(target: tuple[int,int], tolerance: int = 3, corrections: int = 2) -> bool:
     """Ensure the physical cursor is within tolerance of target.
@@ -568,9 +482,8 @@ def _verify_position(target: tuple[int,int], tolerance: int = 3, corrections: in
     for attempt in range(1, corrections+1):
         log.warning(f"Mouse off target by {dist:.1f}px (expected {target}, got {curr}); correcting (attempt {attempt}/{corrections})")
         try:
-            # Direct small correction; avoid full humanized path to reduce drift loops.
-            # Use the virtual-desktop-aware helper so corrections on secondary
-            # monitors don't re-clamp to the primary monitor.
+            # small correction along a short curve (no jump), then exactly on target
+            _small_curve(target, random.uniform(0.03, 0.08))
             _set_cursor(target[0], target[1])
             time.sleep(random.uniform(0.008, 0.02))
         except Exception as e:
@@ -602,10 +515,10 @@ def random_double_click(x, y, variance=5, **move_kw):
         tx = x + random.randint(-variance, variance)
         ty = y + random.randint(-variance, variance)
         move_to(tx, ty, **move_kw)     # primary travel
-        pyautogui.click()
+        press()
         time.sleep(random.uniform(.12, .35))
         move_to(tx, ty, overshoot_prob=0)  # settle
-        pyautogui.click()
+        press()
     finally:
         _block(False)
 

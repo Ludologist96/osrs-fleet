@@ -9,7 +9,7 @@ import random
 import pyautogui
 from core.input import keys as keyboard  # works on Windows and on fleet virtual displays
 
-from core.input.mouse_control import _set_cursor
+from core.input.mouse_control import move_to  # curved (Bezier) moves
 
 
 control = ScriptControl()
@@ -126,7 +126,7 @@ class BotExecutor(Bot):
         try:
             cx = self.client.window.left + self.client.window.width // 2
             cy = self.client.window.top + self.client.window.height // 2
-            _set_cursor(cx, cy)
+            move_to(cx, cy)  # curved move, not a jump
         except (OSError, RuntimeError):
             pass
 
@@ -170,7 +170,7 @@ class BotExecutor(Bot):
 
         # ensure cursor is within window before dragging
         try:
-            _set_cursor(cx, cy)
+            move_to(cx, cy)
         except (OSError, RuntimeError):
             return
 
