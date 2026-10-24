@@ -29,6 +29,10 @@ class ScriptControl(metaclass=SingletonMeta):
         self.long_break_config: BreakCfgParam = None
         self.long_break_cooldown_seconds: float = float(os.environ.get("OSRS_LONG_BREAK_COOLDOWN", 90 * 60))
         self.long_break_end: float = 0
+        # Play time since the bot started / the last long break ended: past this many
+        # seconds a long break is forced (0 = never).
+        self.session_start: float = 0
+        self.session_max_seconds: float = 0
         # Called (once, before the next guarded action) after a long break, e.g. to log in again.
         self.after_long_break = None
         # Called once when a long break starts (e.g. log out), with clicks allowed.
@@ -73,9 +77,14 @@ class ScriptControl(metaclass=SingletonMeta):
             if now < self.break_until:
                 return  # already on a break
             lb = self.long_break_config
-            if (lb and now >= self.long_break_end + self.long_break_cooldown_seconds
-                    and lb.should_break()):
+            played = now - max(self.session_start, self.long_break_end)
+            forced = bool(lb and self.session_max_seconds and self.session_start
+                          and played >= self.session_max_seconds)
+            if lb and (forced or (now >= self.long_break_end + self.long_break_cooldown_seconds
+                                  and lb.should_break())):
                 sec = int(lb.break_duration.choose())
+                if forced:
+                    self.log.info(f"Played {played / 60:.0f} min without a long break: taking one now.")
                 self.initialize_break(sec)
                 self.long_break_end = self.break_until
                 self._relogin_needed = True
@@ -186,6 +195,8 @@ class ScriptControl(metaclass=SingletonMeta):
         self._pause = False
         self.break_until = 0
         self.long_break_end = 0
+        self.session_start = 0
+        self.session_max_seconds = 0
         self._relogin_needed = False
         self._break_hook_pending = False
         self._break_hooking = False

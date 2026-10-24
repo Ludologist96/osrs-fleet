@@ -215,6 +215,58 @@ def acct_name(n: int, names: dict) -> str:
 
 # ------------------------------------------------------------------ texts
 
+# what an account is doing (launcher run "activity") -> icon
+ACT_ICON = {
+    "working": "🪓", "fighting": "⚔️", "looting": "🎒", "burying": "🦴", "banking": "🏦",
+    "walking to bank": "🚶", "walking to trees": "🚶", "walking": "🚶", "dropping": "🗑",
+    "roaming": "🚶", "alt tab": "🪟", "short pause": "☕", "long pause": "😴", "paused": "⏸",
+    "resting": "❤️", "searching": "🔎", "looking for a target": "🔎", "waiting for trees": "🌳",
+    "logging in": "🔑", "free roam": "🧭", "restarting": "🔁",
+}
+# colours for the labels on the screens picture (same idea as the launcher page)
+ACT_COLOR = {
+    "good": (47, 125, 79), "pause": (183, 121, 31), "move": (52, 101, 164),
+    "bad": (180, 56, 47), "idle": (110, 104, 96),
+}
+
+
+def act_kind(a: str) -> str:
+    a = (a or "").lower()
+    if a in ("dead", "error"):
+        return "bad"
+    if a in ("short pause", "long pause", "alt tab", "paused", "resting"):
+        return "pause"
+    if a in ("roaming", "walking", "walking to bank", "walking to trees", "banking", "searching",
+             "looking for a target", "waiting for trees", "free roam", "dropping"):
+        return "move"
+    if a in ("done", "stopped", "waiting", "starting", "logging in", "restarting", ""):
+        return "idle"
+    return "good"
+
+
+COUNT_NAMES = {"logs": "logs cut", "banked": "logs banked", "dropped": "dropped",
+               "kills": "kills", "loot": "loot picked up", "buried": "bones buried", "used": "items used"}
+
+
+def run_seconds(run: dict) -> float:
+    began = run.get("began_at") or run.get("start_at") or time.time()
+    return max(0.0, time.time() - began)
+
+
+def counts_text(counts: dict | None, seconds: float) -> str:
+    """'340 logs cut (412/h) · 120 kills (95/h)'"""
+    if not counts:
+        return ""
+    hours = seconds / 3600 if seconds else 0
+    parts = []
+    for k, v in counts.items():
+        if not v:
+            continue
+        rate = f" ({v / hours:.0f}/h)" if hours >= 0.05 else ""
+        parts.append(f"{v} {COUNT_NAMES.get(k, k)}{rate}")
+    return " · ".join(parts)
+
+
 def status_text() -> str:
     s = slots()
     names = {x["slot"]: x["account"] for x in s}
@@ -230,7 +282,10 @@ def status_text() -> str:
             if run["status"] == "running":
                 world = f", w{run['world']}" if run.get("world") else ""
                 extra = " (restarted)" if "restart" in (run.get("msg") or "") else ""
-                lines.append(f"▶ {n} {name} - {bot}, {fmt_s(run['stops_in'])} left{world}{extra}")
+                act = run.get("activity") or "working"
+                cnt = counts_text(run.get("counts"), run_seconds(run))
+                lines.append(f"{ACT_ICON.get(act, '▶')} {n} {name} - {bot}: {act}, {fmt_s(run['stops_in'])} left"
+                             f"{world}{extra}" + (f"\n      {cnt}" if cnt else ""))
             elif run["status"] == "waiting":
                 lines.append(f"⏳ {n} {name} - {bot}, starts in {fmt_s(run['starts_in'])}")
             elif run["status"] == "starting":
@@ -287,6 +342,36 @@ def stats_text() -> str:
     return "\n".join(lines)
 
 
+def _font(size: int):
+    from PIL import ImageFont
+    for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(f, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def label_tile(img, name: str, activity: str):
+    """Account name + what it's doing, bottom-right of a screen tile, on a colour
+    that shows the kind of activity (green working, amber pause, blue moving, red dead)."""
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(img)
+    f = _font(max(11, img.width // 45))
+    pad = 4
+    nb = d.textbbox((0, 0), name, font=f)
+    ab = d.textbbox((0, 0), activity, font=f)
+    nw, aw, h = nb[2] - nb[0], ab[2] - ab[0], max(nb[3], ab[3]) + 2
+    x2, y2 = img.width - 4, img.height - 4
+    ax1 = x2 - aw - 2 * pad
+    d.rectangle((ax1, y2 - h - pad, x2, y2), fill=ACT_COLOR[act_kind(activity)])
+    d.text((ax1 + pad, y2 - h - pad + 2), activity, font=f, fill=(255, 255, 255))
+    nx1 = ax1 - nw - 2 * pad - 2
+    d.rectangle((nx1, y2 - h - pad, ax1 - 2, y2), fill=(0, 0, 0))
+    d.text((nx1 + pad, y2 - h - pad + 2), name, font=f, fill=(236, 232, 225))
+
+
 def screens_picture(only: list[int] | None = None) -> tuple[bytes, str] | None:
     """One picture with the RuneLite window of every launched slot (else every logged-in one)."""
     from PIL import Image
@@ -324,7 +409,10 @@ def screens_picture(only: list[int] | None = None) -> tuple[bytes, str] | None:
     tw = max(t.width for _, t in tiles)
     th = max(t.height for _, t in tiles)
     sheet = Image.new("RGB", (cols * tw + (cols - 1) * 4, rows * th + (rows - 1) * 4), (20, 19, 17))
-    for i, (_, t) in enumerate(tiles):
+    for i, (n, t) in enumerate(tiles):
+        run = r.get(str(n)) or {}
+        act = run.get("activity") or ("idle" if not run else run.get("status", ""))
+        label_tile(t, f"{n} {acct_name(n, names)}", act)
         sheet.paste(t, ((i % cols) * (tw + 4), (i // cols) * (th + 4)))
     buf = io.BytesIO()
     sheet.save(buf, "JPEG", quality=80)
@@ -698,9 +786,14 @@ def watcher():
                 if r["bot"] == "freeroam":
                     msgs.append(f"✅ Free roam over: {who}")
                 else:
-                    msgs.append(f"✅ Run finished: {who} - {bot}, ~{fmt_s(ran)} (logged out)")
+                    ran = r.get("ran_s") or ran
+                    cnt = counts_text(r.get("counts"), ran)
+                    msgs.append(f"✅ Run finished: {who} - {bot}, ~{fmt_s(ran)} (logged out)"
+                                + (f"\n   {cnt}" if cnt else ""))
             elif st == "dead" and ps != "dead":
-                msgs.append(f"💀 {who} died - {bot} stopped, the character is left where it is.")
+                cnt = counts_text(r.get("counts"), r.get("ran_s") or 0)
+                msgs.append(f"💀 {who} died - {bot} stopped, the character is left where it is."
+                            + (f"\n   {cnt}" if cnt else ""))
             elif st == "error" and ps != "error":
                 if is_login(msg):
                     msgs.append(f"🔑 Login failed: {who}\n   {msg}")

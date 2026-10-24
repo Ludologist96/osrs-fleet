@@ -2,6 +2,7 @@ from bots.core import BotConfigMixin
 from bots.core.cfg_types import StringListParam, BooleanParam, StringParam, IntParam, FloatParam, RGBParam, RangeParam, BreakCfgParam, RGBListParam, RouteParam, WaypointParam, ItemParam
 from core.bot import Bot
 from core.bank import BankInterface
+from core.human import HumanMixin
 
 from core import tools, inventory
 from core.camera import Camera
@@ -30,15 +31,15 @@ class BotConfig(BotConfigMixin):
     max_retries: IntParam = IntParam(3)  # Maximum number of retries before giving up
     
     # Optional configuration
-    chop_click_delay: RangeParam = RangeParam(0.2, 0.5)
-    inventory_check_delay: RangeParam = RangeParam(1.5, 3.0)
+    chop_click_delay: RangeParam = RangeParam(0.25, 0.65)
+    inventory_check_delay: RangeParam = RangeParam(1.6, 3.4)
     # Wait until the player stops walking after clicking a tree. Needs RuneLite's
     # player position overlay; without it every click wastes ~5 s retrying.
     wait_while_walking: BooleanParam = BooleanParam(False)
     
     break_cfg: BreakCfgParam = BreakCfgParam(
-        RangeParam(10, 30),  # break duration range in seconds
-        FloatParam(0.01)     # break chance
+        RangeParam(12, 40),  # break duration range in seconds
+        FloatParam(0.012)    # break chance
     )
     # Chance a short break is spent looking through the side-panel tabs
     # (skills, quests, equipment...) before going back to the inventory.
@@ -46,9 +47,36 @@ class BotConfig(BotConfigMixin):
     # Long break: AFK long enough to get logged out (logs back in after),
     # at most once every 90 minutes.
     long_break_cfg: BreakCfgParam = BreakCfgParam(
-        RangeParam(1800, 2700),  # 30-45 minutes, logged out
-        FloatParam(0.01)
+        RangeParam(1500, 2000),  # 25-33 minutes, logged out
+        FloatParam(0.014)
     )
+    # Forced long break after this much play (minutes) without one.
+    session_max_minutes: IntParam = IntParam(210)
+
+    # --- player habits (core/human.py) ---
+    # Alt-tab: 1-2 s after a tree click, sometimes look at another window for a while.
+    alt_tab_chance: FloatParam = FloatParam(0.06)
+    alt_tab_cooldown: FloatParam = FloatParam(60.0)        # s between two rolls
+    alt_tab_short: RangeParam = RangeParam(4.0, 18.0)       # s
+    alt_tab_medium: RangeParam = RangeParam(25.0, 90.0)     # s
+    alt_tab_medium_chance: FloatParam = FloatParam(0.22)
+    # Walk-away: after dropping/banking, sometimes a few steps via the minimap.
+    walk_away_chance: FloatParam = FloatParam(0.018)
+    walk_away_cooldown: FloatParam = FloatParam(300.0)     # s
+    walk_away_tiles: RangeParam = RangeParam(3, 8)
+    walk_away_pause: RangeParam = RangeParam(0.8, 2.2)
+    # Rarely click a little next to the tree, then click the tree again.
+    misclick_chance: FloatParam = FloatParam(0.025)
+    # Sometimes click a tree without waiting for its mouse-over text (checked after).
+    skip_hover_chance: FloatParam = FloatParam(0.40)
+    skip_hover_check: RangeParam = RangeParam(0.9, 1.4)    # s until "is it chopping?"
+    # After a click, sometimes a short extra pause.
+    micro_idle_chance: FloatParam = FloatParam(0.07)
+    micro_idle: RangeParam = RangeParam(0.25, 0.9)
+    # Tree colours: sometimes a random order instead of cycling through them.
+    color_shuffle_chance: FloatParam = FloatParam(0.20)
+    # Before a click, sometimes move the mouse a bit away and back.
+    pre_click_wiggle_chance: FloatParam = FloatParam(0.08)
 
     ###########################################
     # Willows at Draynor Village
@@ -65,7 +93,7 @@ class BotConfig(BotConfigMixin):
     ])
     # After clicking a tree, wait up to this long (seconds) for chopping to start,
     # e.g. while the character walks there, before clicking anything else.
-    chop_start_timeout: FloatParam = FloatParam(10.0)
+    chop_start_timeout: FloatParam = FloatParam(11.0)
     drop_items: BooleanParam = BooleanParam(False)  # True = drop logs, False = bank logs
     bank_tile: RGBParam = RGBParam(0, 255, 0)  # Green by default, only used when banking
     bank_to_trees: RouteParam = RouteParam([
@@ -79,14 +107,17 @@ class BotConfig(BotConfigMixin):
     # instead of walking the bank route.
     tree_respawn_wait: RangeParam = RangeParam(1.5, 4.0)
     max_tree_waits: IntParam = IntParam(40)  # stop after this many waits in a row
+    # Trees cut without any break: take a short one (0 = off).
+    max_trees_before_forced_break: IntParam = IntParam(0)
 
     # Camera: after a tree is cut, this chance to rotate / zoom the camera a bit
-    camera_chance: FloatParam = FloatParam(0.05)
+    camera_chance: FloatParam = FloatParam(0.10)
+    camera_force_every: IntParam = IntParam(10)  # trees cut without a fidget: force one
     camera_rotate_time: RangeParam = RangeParam(0.3, 1.2)  # seconds holding an arrow key (~3 s = full turn)
     camera_zoom_chance: FloatParam = FloatParam(0.5)       # chance a fidget also zooms
     zoom_min: IntParam = IntParam(-4)  # wheel notches out from the starting zoom (limit)
     zoom_max: IntParam = IntParam(3)   # wheel notches in from the starting zoom (limit)
-    start_zoom_in: IntParam = IntParam(9)  # home view: fully out, then this many notches in (~halfway)
+    start_zoom_in: IntParam = IntParam(14)  # home view: fully out, then this many notches in
     # No marked tree visible: turn the camera to look for one (from the 2nd miss in a row)
     camera_search: BooleanParam = BooleanParam(True)
     camera_search_time: RangeParam = RangeParam(0.6, 1.4)
@@ -106,7 +137,7 @@ class BotConfig(BotConfigMixin):
     # inv_full_at: IntParam = IntParam(28)  # Default inventory capacity
     
     
-class BotExecutor(Bot):
+class BotExecutor(HumanMixin, Bot):
     name: str = "Woodcutter Bot"
     description: str = "A bot that chops trees and banks or drops logs when inventory is full"
     tier: str = "B"
@@ -128,6 +159,7 @@ class BotExecutor(Bot):
         self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value,
                              self.cfg.start_zoom_in.value)
         self.chopped_once = False
+        self._last_used: int | None = None  # inventory slots used at the last look (log counter)
         
         if not self.cfg.drop_items.value and not self.cfg.bank_to_trees.value:
             self.log.warning("Banking enabled but no route specified. Please set bank_to_trees in the config.")
@@ -136,7 +168,10 @@ class BotExecutor(Bot):
             self.bank = BankInterface(self.client, self.client.item_db)
         
     def start(self):
-        self.log.info(f"Starting Woodcutter Bot for {self.cfg.log_type.name}")
+        self.log.info(f"Starting Woodcutter Bot for {self.cfg.log_type.name} "
+                      f"({'drop' if self.cfg.drop_items.value else 'bank'} mode)")
+        self.human_init()
+        self.set_activity("working")
         
         while not self.terminate:
             try:
@@ -146,52 +181,46 @@ class BotExecutor(Bot):
                 if self.check_inventory_full():
                     if self.cfg.drop_items.value:
                         self.log.info("Inventory is full. Dropping logs...")
+                        self.set_activity("dropping")
                         self.drop_logs()
                     else:
                         self.log.info("Inventory is full. Banking logs...")
-                        # Travel to bank
-                        self.log.info("Traveling to bank...")
-                        try:
-                            self.mover.execute_route(self.cfg.bank_to_trees.reverse())
-                        except Exception as e:
-                            self.log.error(f"Failed to travel to bank: {e}")
-                            # retry once
-                            self.mover.execute_route(self.cfg.bank_to_trees.reverse())
-                            
-                        # Bank items
-                        if not self.bank_logs():
-                            self.log.error("Failed to bank logs. Retrying...")
-                            continue
-                            
-                        # Return to trees
-                        self.log.info("Returning to trees...")
-                        try:
-                            self.mover.execute_route(self.cfg.bank_to_trees)
-                        except Exception as e:
-                            self.log.error(f"Failed to return to trees: {e}")
-                            # retry once
-                            self.mover.execute_route(self.cfg.bank_to_trees)
+                        if not self.bank_trip():
+                            self.log.error("Banking failed twice in a row. Stopping.")
+                            self.exit_reason = "bank_failed"
+                            return
+                    self.set_activity("working")
+                    # a finished cycle: now and then a few steps elsewhere
+                    self.maybe_walk_away()
                 
                 # Check if we're woodcutting, if not, click on tree
                 if not self.client.is_woodcutting:
                     try:
                         self.log.info("Not woodcutting. Clicking tree...")
+                        self.set_activity("working")
                         # a tree was just cut: sometimes fidget with the camera first
-                        if self.chopped_once and random.random() < self.cfg.camera_chance.value:
-                            self.camera.random_move(self.cfg.camera_rotate_time.value,
-                                                    self.cfg.camera_zoom_chance.value)
+                        if self.chopped_once:
+                            self.note_action()
+                            self.maybe_camera_fidget()
+                            self.maybe_forced_break("max_trees_before_forced_break")
                         self.chop_tree()
                         self.chopped_once = True
                         self.tree_waits = 0
+                    except ScriptTerminationException:
+                        raise
                     except Exception as e:
                         if self.terminate:
                             break
                         if self.cfg.drop_items.value:
                             # Marked trees are stumps (their marker disappears): wait for respawn.
                             self.tree_waits += 1
+                            self.set_activity("waiting for trees")
                             if self.tree_waits > self.cfg.max_tree_waits.value:
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
+                            # all stumps: a good moment to wander a few steps
+                            if self.tree_waits >= 2 and self.maybe_walk_away(prefer=True):
+                                continue
                             if self.cfg.camera_search.value and self.tree_waits >= 2:
                                 self.camera.search(self.cfg.camera_search_time.value, self.tree_waits - 1)
                             wait = self.cfg.tree_respawn_wait.choose()
@@ -211,6 +240,7 @@ class BotExecutor(Bot):
                             except Exception:
                                 pass
                         self.log.warning(f"Did we die or something? walking to trees: {e}")
+                        self.set_activity("walking")
                         self.mover.execute_route(self.cfg.bank_to_trees)
                         self.chop_tree()
                 
@@ -240,10 +270,46 @@ class BotExecutor(Bot):
                 else:
                     self.log.warning(f"Retry attempt {self.consecutive_failures}/{self.cfg.max_retries.value}")
                     time.sleep(3)  # Wait a bit before retrying
-    
+
+    # ------------------------------------------------------------------ banking
+    def bank_trip(self) -> bool:
+        """Walk to the bank, deposit, walk back. The whole trip is tried once more if any
+        part of it fails."""
+        for attempt in (1, 2):
+            if self.terminate:
+                return True
+            try:
+                self.set_activity("walking to bank")
+                self.log.info("Traveling to bank...")
+                self.mover.execute_route(self.cfg.bank_to_trees.reverse())
+                self.set_activity("banking")
+                if not self.bank_logs():
+                    raise RuntimeError("couldn't bank the logs")
+                self.set_activity("walking to trees")
+                self.log.info("Returning to trees...")
+                self.mover.execute_route(self.cfg.bank_to_trees)
+                return True
+            except ScriptTerminationException:
+                raise
+            except Exception as e:
+                self.log.error(f"Bank trip failed (attempt {attempt}/2): {e}")
+                time.sleep(random.uniform(1.5, 3.0))
+        return False
+
+    # ------------------------------------------------------------------ chopping
+    def _color_order(self) -> list:
+        """Tree colours to try: usually cycling (start after the last one used),
+        sometimes a random order."""
+        tiles = list(self.cfg.tree_tiles.value)
+        if random.random() < self.cfg.color_shuffle_chance.value:
+            random.shuffle(tiles)
+            return [(None, c) for c in tiles]
+        return [((self.tree_index + i) % len(tiles), tiles[(self.tree_index + i) % len(tiles)])
+                for i in range(len(tiles))]
+
     def chop_tree(self):
-        """Click a marked tree. Tries every tree colour once, starting with the next one
-        in the cycle, so a stump (its marker is gone) costs no extra waiting."""
+        """Click a marked tree. Tries every tree colour once, so a stump (its marker is
+        gone) costs no extra waiting."""
         tree_tiles = self.cfg.tree_tiles.value
 
         if not tree_tiles:
@@ -252,8 +318,7 @@ class BotExecutor(Bot):
 
         errors = []
         clicked = False
-        for i in range(len(tree_tiles)):
-            current_tree = tree_tiles[(self.tree_index + i) % len(tree_tiles)]
+        for idx, current_tree in self._color_order():
             try:
                 clicked = self._click_tree_of_color(current_tree)
             except ScriptTerminationException:
@@ -262,9 +327,8 @@ class BotExecutor(Bot):
                 errors.append(f"{current_tree.to_hex()}: {e}")
                 continue
             if clicked:
-                self.tree_index += i + 1
-                time.sleep(self.cfg.chop_click_delay.choose())
-                self._wait_for_chop_start()
+                if idx is not None:
+                    self.tree_index = idx + 1
                 break
             errors.append(f"{current_tree.to_hex()}: no tree showing '{self.cfg.tree_hover.value}'")
         if not clicked:
@@ -277,20 +341,58 @@ class BotExecutor(Bot):
         start_time = time.time()
         timeout = 15  # Timeout after 15 seconds
         
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < timeout and not self.terminate:
             if not self.client.is_moving():
                 break
             time.sleep(0.2)
     
-    def _wait_for_chop_start(self) -> None:
+    def _wait_for_chop_start(self, timeout: float | None = None) -> bool:
         """Don't click another tree while the character is still walking to this one:
         wait until the Woodcutting overlay says we're chopping (or a timeout)."""
-        deadline = time.time() + float(self.cfg.chop_start_timeout.value)
+        deadline = time.time() + float(timeout if timeout is not None else self.cfg.chop_start_timeout.value)
         while time.time() < deadline and not self.terminate:
             if self.client.is_woodcutting:
-                return
+                return True
             time.sleep(random.uniform(0.4, 0.8))
         self.log.debug("Chopping didn't start before the timeout")
+        return False
+
+    def _wiggle(self, near: tuple[int, int]) -> None:
+        """Mouse a little away from the target and back (a player's hand isn't still)."""
+        if random.random() >= self.cfg.pre_click_wiggle_chance.value:
+            return
+        import math
+        d, a = random.uniform(25, 60), random.uniform(0, 2 * math.pi)
+        self.client.move_to((int(near[0] + d * math.cos(a)), int(near[1] + d * math.sin(a))))
+        time.sleep(random.uniform(0.08, 0.3))
+
+    def _instant_click(self, target: MatchResult) -> bool:
+        """Click the tree without reading its mouse-over first, then check that chopping
+        started. False = it didn't (walking, wrong spot, wrong tree): caller verifies."""
+        pt = target.get_point_within()
+        self._wiggle(pt)
+        self.client.click(pt)
+        self.log.debug(f"Clicked a tree without the mouse-over check at {pt}")
+        time.sleep(self.cfg.skip_hover_check.choose())
+        if self.client.is_woodcutting:
+            return True
+        return False
+
+    def _after_click(self, target: MatchResult) -> None:
+        """A tree was clicked: maybe a misclick + re-click, wait until chopping starts,
+        maybe a short pause, maybe alt-tab while it chops."""
+        t_click = time.time()
+        if self.maybe_misclick(target.get_center()):
+            self.client.smart_click_match(target, [self.cfg.tree_hover.value], retry_hover=3)
+            t_click = time.time()
+        time.sleep(self.cfg.chop_click_delay.choose())
+        started = self._wait_for_chop_start()
+        self.micro_idle()
+        if started:
+            wait = t_click + random.uniform(1.0, 2.0) - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            self.maybe_alt_tab(lambda: self.client.is_woodcutting, "chopping")
 
     def _click_tree_of_color(self, color: RGBParam) -> bool:
         """Click a marked tree of this colour whose mouse-over text matches tree_hover.
@@ -302,9 +404,17 @@ class BotExecutor(Bot):
             for m in skip:
                 sc = m.remove_from(sc)
             match = tools.find_color_box(sc, color.value, tol=40)  # raises when none left
+            inner = match.scale_px(-max(2, min(match.width, match.height) // 6))
+            if random.random() < self.cfg.skip_hover_chance.value:
+                if self._instant_click(inner):
+                    self._after_click(inner)
+                    return True
+                self.log.debug("No chopping after the quick click: checking the mouse-over")
             try:
+                self._wiggle(match.get_center())
                 self.client.smart_click_match(match, [self.cfg.tree_hover.value],
-                                              retry_hover=3, center_point=True)
+                                              retry_hover=3, center_point=False)
+                self._after_click(match)
                 return True
             except RuntimeError as e:
                 self.log.debug(f"Skipping marked tree ({e})")
@@ -312,19 +422,27 @@ class BotExecutor(Bot):
                 skip.append(MatchResult(x1 - 4, y1 - 4, x2 + 4, y2 + 4))
         return False
 
+    # ------------------------------------------------------------------ inventory
     def check_inventory_full(self):
         """Full = every inventory slot holds something (logs, gems, anything)."""
         try:
-            self.client.click_toolplane(ToolplaneTab.INVENTORY)
-            time.sleep(0.3)
             sc = self.client.get_screenshot()
+            if self.client.toolplane.get_active_tab(sc) != ToolplaneTab.INVENTORY.value:
+                self.client.click_toolplane(ToolplaneTab.INVENTORY)
+                time.sleep(0.3)
+                sc = self.client.get_screenshot()
             used = len(inventory.used_slots(sc))
+            if self._last_used is not None and used > self._last_used:
+                self.count("logs", used - self._last_used)
+            self._last_used = used
             self.log.info(f"Inventory: {used}/28 slots used")
             if self.cfg.drop_items.value:
                 return used >= 28
             # banking mode keeps the old rule (count of logs)
-            logs = self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9)
+            logs = self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9, verify_tab=False)
             return len(logs) >= self.cfg.inv_full_at.value or used >= 28
+        except ScriptTerminationException:
+            raise
         except Exception as e:
             self.log.warning(f"Error checking inventory: {e}")
             return False
@@ -361,11 +479,15 @@ class BotExecutor(Bot):
             try:
                 keyboard.press('shift')
                 for rect in order:
-                    self.client.click(rect.scale_px(-6), rand_move_chance=0, after_click_settle_chance=0)
+                    self.client.click(rect.scale_px(-6))
                     time.sleep(random.uniform(0.1, 0.3))
             finally:
                 keyboard.release('shift')
+            self.count("dropped", len(order))
+            self._last_used = None
             self.log.info("Inventory dropped")
+        except ScriptTerminationException:
+            raise
         except Exception as e:
             raise RuntimeError(f"Failed to drop items: {e}")
 
@@ -374,6 +496,10 @@ class BotExecutor(Bot):
         self.log.info("Banking logs...")
         
         try:
+            try:
+                n_logs = len(self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9))
+            except Exception:
+                n_logs = 0
             # Click on the bank tile
             self.client.smart_click_tile(
                 self.cfg.bank_tile.value,
@@ -383,14 +509,17 @@ class BotExecutor(Bot):
                 filter_ui=True
             )
             
-            # Wait for character to stop moving
-            while self.client.is_moving():
+            # Wait for character to stop moving (bounded)
+            deadline = time.time() + 20
+            while time.time() < deadline and not self.terminate and self.client.is_moving():
                 time.sleep(0.2)
             
             # Wait for bank interface to open
             timeout = 5
             start_time = time.time()
             while not self.bank.is_open:
+                if self.terminate:
+                    return False
                 if time.time() - start_time > timeout:
                     self.log.warning("Timed out waiting for bank to open")
                     return False
@@ -402,8 +531,13 @@ class BotExecutor(Bot):
             
             # Close bank
             self.bank.close()
+            if n_logs:
+                self.count("banked", n_logs)
+            self._last_used = None
             return True
             
+        except ScriptTerminationException:
+            raise
         except Exception as e:
             self.log.error(f"Error banking logs: {e}")
             return False

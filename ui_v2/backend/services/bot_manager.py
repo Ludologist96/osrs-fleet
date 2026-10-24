@@ -360,6 +360,8 @@ class BotManagerService:
         log.info(f"start_bot() called for bot_id: {bot_id}")
         self.last_error = None
         self.last_exit_reason = None
+        self.last_counts = {}
+        self.last_runtime = 0.0
         try:
             if self.current_bot:
                 log.info(f"Stopping currently running bot: {self.current_bot.bot_id}")
@@ -385,6 +387,7 @@ class BotManagerService:
             bot_executor = executor_class(bot_config, user=username)
 
             def _run_bot(executor=bot_executor, bid=bot_id):
+                started = time.time()
                 try:
                     if hasattr(executor, "_start_view"):
                         executor._start_view()  # inventory tab + home camera view
@@ -395,6 +398,8 @@ class BotManagerService:
                 finally:
                     # why it ended by itself, e.g. "died" (the launcher reads it from the status)
                     self.last_exit_reason = getattr(executor, "exit_reason", None)
+                    self.last_counts = dict(getattr(executor, "counts", {}) or {})
+                    self.last_runtime = time.time() - started
                     # stopped by the user / the launcher's timer (not when it ended by itself)
                     control = getattr(executor, "control", None)
                     if control is not None and control.terminate and hasattr(executor, "logout_after_stop"):
@@ -455,15 +460,35 @@ class BotManagerService:
             self.current_bot = None
             return False
 
+    @staticmethod
+    def activity_of(executor) -> str:
+        """What the bot is doing now: breaks and logins come from ScriptControl,
+        the rest from the bot itself (executor.activity)."""
+        c = getattr(executor, "control", None)
+        now = time.time()
+        if c is not None:
+            if c.pause:
+                return "paused"
+            if getattr(c, "_relogging", False):
+                return "logging in"
+            if now < c.break_until:
+                # a long break sets long_break_end to its own end
+                return "long pause" if abs(getattr(c, "long_break_end", 0) - c.break_until) < 1 else "short pause"
+        return getattr(executor, "activity", None) or "working"
+
+    def _ended(self) -> Dict[str, Any]:
+        return {"reason": getattr(self, "last_exit_reason", None),
+                "counts": getattr(self, "last_counts", {}) or {},
+                "runtime": getattr(self, "last_runtime", 0.0)}
+
     def get_bot_status(self, bot_id: str) -> Dict[str, Any]:
-        reason = getattr(self, "last_exit_reason", None)
         if not self.current_bot or self.current_bot.bot_id != bot_id:
-            return {"status": "not_running", "reason": reason}
+            return {"status": "not_running", **self._ended()}
 
         if not self.current_bot.thread.is_alive():
             self.current_bot.executor.logout_on_stop = False  # ended by itself: leave it as it is
             self.stop_bot(bot_id)
-            return {"status": "terminated", "reason": getattr(self, "last_exit_reason", None)}
+            return {"status": "terminated", **self._ended()}
 
         try:
             if hasattr(self.current_bot.executor, "control"):
@@ -473,10 +498,13 @@ class BotManagerService:
                 runtime = time.time() - self.current_bot.start_time
 
                 if is_terminated:
-                    return {"status": "terminated"}
+                    return {"status": "terminated", "activity": "stopping",
+                            "counts": dict(getattr(self.current_bot.executor, "counts", {}) or {})}
 
                 return {
                     "status": "paused" if is_paused else "running",
+                    "activity": self.activity_of(self.current_bot.executor),
+                    "counts": dict(getattr(self.current_bot.executor, "counts", {}) or {}),
                     "paused": is_paused,
                     "runtime": runtime,
                     "runtime_formatted": tools.seconds_to_hms(runtime),

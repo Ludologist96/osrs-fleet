@@ -21,7 +21,11 @@
   body { background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
          font: 13px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
   #top { flex: none; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 14px 6px; }
-  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+  .bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 10px; }
+  .bar > * { flex: none; }
+  .bar #res { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar .grow { flex: 1 1 0; }
+  @media (max-width: 1100px) { .bar { flex-wrap: wrap; } }
   h1 { font-size: 15px; margin: 0; }
   a { color: var(--muted); font-size: 12px; }
   .grow { flex: 1; }
@@ -47,7 +51,7 @@
   label.f { display: flex; align-items: center; gap: 6px; }
   select, input[type=number] { font: inherit; padding: 3px 6px; border-radius: 6px;
          border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  input[type=number] { width: 58px; }
+  input[type=number] { width: 48px; }
   button { font: inherit; padding: 4px 11px; border-radius: 7px; border: 1px solid var(--line);
            background: transparent; color: var(--ink); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
@@ -73,36 +77,60 @@
          background: rgba(0,0,0,.6); color: #ece8e1; pointer-events: none; font-size: 11px; }
   .msg { position: absolute; inset: 0; display: grid; place-items: center; color: #9b958b; text-align: center; padding: 10px; }
   #empty { position: absolute; inset: 0; display: grid; place-items: center; color: #9b958b; font-size: 14px; }
+  /* one-row controls: dropdown panels */
+  .dd { position: relative; }
+  .ddb { white-space: nowrap; }
+  .ddp { display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; background: var(--panel);
+         border: 1px solid var(--line); border-radius: 8px; padding: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+         max-height: 70vh; overflow: auto; min-width: 280px; }
+  .dd.open .ddp { display: block; }
+  .ddp .accts, .ddp .runs { flex-direction: column; flex-wrap: nowrap; margin-top: 0; }
+  .ddp .acct { max-width: none; }
+  .ddp .run .m { max-width: 340px; }
+  .act { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; color: #fff; white-space: nowrap; }
+  .k-good { background: #2f7d4f; } .k-pause { background: #b7791f; } .k-move { background: #3465a4; }
+  .k-bad { background: #b4382f; } .k-idle { background: #6e6860; }
+  .lbl { display: flex; gap: 4px; align-items: center; background: transparent; padding: 0; }
+  .lbl .nm2 { background: rgba(0,0,0,.65); padding: 1px 5px; border-radius: 4px; }
+  dialog#cfgd { border: 1px solid var(--line); border-radius: 8px; padding: 14px; max-width: 420px; width: calc(100% - 32px);
+    background: var(--panel); color: var(--ink); }
+  dialog#cfgd label { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 6px 0; }
+  dialog#cfgd input[type=text] { flex: 1; min-width: 0; font: inherit; padding: 3px 6px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  dialog#cfgd h3 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); }
+  dialog#cfgd .btns { display: flex; gap: 6px; margin-top: 12px; }
+  dialog#cfgd pre { white-space: pre-wrap; font-size: 12px; margin: 8px 0 0; }
 </style>
 </head>
 <body>
 <div id="top">
   <div class="bar">
     <h1>OSRS Fleet</h1>
-    <a href="/">Dashboard</a>
-    <span class="small" id="res"></span>
-    <span class="grow"></span>
-    <span class="small hide-min">Click a screen to control it · keys go to the screen under the mouse</span>
-    <button id="impopen" title="Give slots their own proxies from the list in the fleet folder">Proxies</button>
-    <button id="toggle" title="Hide or show the controls">Hide controls</button>
-  </div>
-  <div class="hide-min">
-    <div class="accts" id="accts"><span class="small">Loading accounts…</span></div>
-    <div class="row">
-      <label class="f">Bot <select id="bot"></select></label>
-      <label class="f">Run for <input type="number" id="hours" min="0" max="24" step="1" value="1"> h
-        <input type="number" id="mins" min="0" max="59" step="5" value="0"> min</label>
-      <label class="f" title="Each account starts 1–4 min after the previous one, run times vary ±10%"><input type="checkbox" id="spread" checked> Spread out</label>
-      <button class="primary" id="go">Launch</button>
-      <button id="all">Select all</button>
-      <span class="err" id="err"></span>
+    <div class="dd" id="ddAcc">
+      <button class="ddb" id="accBtn" title="Choose the accounts to launch">Accounts ▾</button>
+      <div class="ddp">
+        <div class="accts" id="accts"><span class="small">Loading accounts…</span></div>
+        <div class="row"><button id="all">Select all</button><button id="none">Select none</button></div>
+      </div>
     </div>
-  </div>
-  <div class="row">
-    <div class="runs" id="runs"></div>
+    <div class="dd" id="ddRun">
+      <button class="ddb" id="runBtn" title="What every launched account is doing">Bots: – ▾</button>
+      <div class="ddp">
+        <div class="runs" id="runs"></div>
+        <div class="row"><button id="clear">Clear finished</button><button id="stopall">Stop all</button></div>
+      </div>
+    </div>
+    <select id="bot" title="Bot to run"></select>
+    <button id="cfgopen" title="Settings of the chosen bot for the chosen accounts">⚙ Settings</button>
+    <label class="f">Run for <input type="number" id="hours" min="0" max="24" step="1" value="1"> h
+      <input type="number" id="mins" min="0" max="59" step="5" value="0"> min</label>
+    <label class="f" title="Each account starts 1–4 min after the previous one, run times vary ±10%"><input type="checkbox" id="spread" checked> Spread out</label>
+    <button class="primary" id="go">Launch</button>
+    <span class="err" id="err"></span>
     <span class="grow"></span>
-    <button id="clear" class="hide-min">Clear finished</button>
-    <button id="stopall">Stop all</button>
+    <span class="small" id="res"></span>
+    <a href="/">Dashboard</a>
+    <button id="impopen" title="Give slots their own proxies from the list in the fleet folder">Proxies</button>
   </div>
 </div>
 <div id="grid"><div id="empty">Start bots above — their screens show here.</div></div>
@@ -128,6 +156,13 @@
   </div>
   <pre id="pxout"></pre>
 </dialog>
+<dialog id="cfgd">
+  <b id="cfgt">Settings</b>
+  <div class="small" id="cfgfor"></div>
+  <div id="cfgbody"></div>
+  <div class="btns"><button class="primary" id="cfgsave">Save</button><button id="cfgclose">Close</button></div>
+  <pre id="cfgout"></pre>
+</dialog>
 <dialog id="impd">
   <b>Import proxy list</b>
   <div class="small">Reads the proxy list (.txt, one ip:port:user:pass per line) from the fleet folder on Windows.
@@ -145,6 +180,21 @@ const fmt = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 36
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m ${String(x).padStart(2, '0')}s` : `${x}s`; };
 const gb = (b) => (b / 1073741824).toFixed(1);
 const ACTIVE = ['waiting', 'starting', 'running'];
+// colour group of an activity (same groups as the Telegram screens picture)
+const KIND = (a) => { a = (a || '').toLowerCase();
+  if (['dead', 'error'].includes(a)) return 'bad';
+  if (['short pause', 'long pause', 'alt tab', 'paused', 'resting'].includes(a)) return 'pause';
+  if (['roaming', 'walking', 'walking to bank', 'walking to trees', 'banking', 'searching', 'looking for a target',
+       'waiting for trees', 'free roam', 'dropping'].includes(a)) return 'move';
+  if (['done', 'stopped', 'waiting', 'starting', 'logging in', 'restarting', ''].includes(a)) return 'idle';
+  return 'good'; };
+const chip = (a) => { const c = document.createElement('span'); c.className = 'act k-' + KIND(a); c.textContent = a || '–'; return c; };
+const COUNT = { logs: 'logs', banked: 'banked', dropped: 'dropped', kills: 'kills', loot: 'loot', buried: 'buried', used: 'used' };
+function countsText(r) {
+  const c = r.counts || {}; const began = r.began_at || r.start_at; const secs = r.ran_s || (Date.now() / 1000 - began);
+  const h = secs / 3600;
+  return Object.entries(c).filter(([k, v]) => v).map(([k, v]) => `${v} ${COUNT[k] || k}` + (h >= 0.05 ? ` (${Math.round(v / h)}/h)` : '')).join(' · ');
+}
 const SCREEN_W = 1280, SCREEN_H = 800;
 let runs = {}, names = {}, geom = {}, tiles = {}, shown = [];
 const browsing = new Set();   // slots with a browser open: show their whole screen
@@ -166,6 +216,7 @@ async function loadAccounts() {
     el.innerHTML = `<input type="checkbox" value="${sl.slot}" ${name && !busy ? '' : 'disabled'} ${checked.has(String(sl.slot)) && !busy ? 'checked' : ''}>
       <span class="sl">${sl.slot}</span><span class="nm"></span>`;
     el.querySelector('.nm').textContent = name || 'no login';
+    el.querySelector('input').addEventListener('change', accLabel);
     if (busy) el.title = 'already launched';
     if (!name) {   // new account: copy the login that the Jagex Launcher last saved on Windows
       const b = document.createElement('button'); b.className = 'cl'; b.textContent = 'copy login';
@@ -183,11 +234,23 @@ async function loadAccounts() {
     box.appendChild(el);
   }
   const sel = $('bot'); if (!sel.options.length) {
-    const fr = document.createElement('option'); fr.value = 'freeroam'; fr.textContent = 'Free roam (just log in, no bot)'; sel.appendChild(fr);
+    const fr = document.createElement('option'); fr.value = 'freeroam'; fr.textContent = 'Free roam (log in only)'; sel.appendChild(fr);
     for (const x of b.bots) { const o = document.createElement('option'); o.value = x.id; o.textContent = x.name; sel.appendChild(o); }
     sel.value = localStorage.getItem('osrs-bot') || 'woodcutter';
   }
-  for (const n of shown) if (tiles[n]) tiles[n].lbl.textContent = `${n} · ${names[n] || ''}`;
+  accLabel();
+  for (const n of shown) setLabel(n);
+}
+function accLabel() {
+  const sel = [...document.querySelectorAll('#accts input:checked')];
+  $('accBtn').textContent = sel.length ? `Accounts: ${sel.length === 1 ? (names[sel[0].value] || 'slot ' + sel[0].value) : sel.length + ' chosen'} ▾` : 'Accounts ▾';
+}
+function setLabel(n) {
+  const t = tiles[n]; if (!t) return;
+  const r = runs[n]; t.lbl.innerHTML = '';
+  const nm = document.createElement('span'); nm.className = 'nm2'; nm.textContent = `${n} · ${names[n] || ''}`;
+  t.lbl.append(nm, chip(r ? r.activity : ''));
+  const ct = r ? countsText(r) : ''; t.lbl.title = ct;
 }
 
 // ------------------------------------------------------------- per-slot proxy
@@ -270,20 +333,31 @@ async function loadRuns() {
     const when = r.status === 'waiting' ? 'starts in ' + fmt(r.starts_in)
       : ACTIVE.includes(r.status) ? fmt(r.stops_in) + ' left' : '';
     el.innerHTML = `<b>${r.slot}</b><span class="a"></span><span>${r.bot === 'freeroam' ? 'free roam' : r.bot}</span>
-      <span class="st st-${r.status}">${r.status}</span><span class="small">${when}</span><span class="m"></span>
+      <span class="ch"></span><span class="small">${when}</span><span class="m"></span>
       ${ACTIVE.includes(r.status) ? '<button class="stop">Stop</button>' : ''}`;
     el.querySelector('.a').textContent = r.account || '';
-    el.querySelector('.m').textContent = r.msg || ''; el.querySelector('.m').title = r.msg || '';
+    el.querySelector('.ch').append(chip(r.activity || r.status));
+    const ct = countsText(r);
+    el.querySelector('.m').textContent = ct || r.msg || ''; el.querySelector('.m').title = (r.msg || '') + (ct ? '\n' + ct : '');
     const b = el.querySelector('.stop'); if (b) b.onclick = () => api('/api/launch/stop', { slots: [r.slot] }).then(refresh);
     box.appendChild(el);
   }
+  const n = (st) => keys.filter(k => runs[k].status === st).length;
+  const parts = [];
+  if (n('running')) parts.push(`${n('running')} running`);
+  if (n('waiting') + n('starting')) parts.push(`${n('waiting') + n('starting')} starting`);
+  if (n('dead')) parts.push(`${n('dead')} dead`);
+  if (n('error')) parts.push(`${n('error')} failed`);
+  if (n('done') + n('stopped')) parts.push(`${n('done') + n('stopped')} finished`);
+  $('runBtn').textContent = `Bots: ${parts.join(' · ') || 'none'} ▾`;
   syncScreens();
+  for (const k of shown) setLabel(k);
 }
 
 async function loadStats() {
   try {
     const s = await api('/api/stats?min=5'); const v = s.vm;
-    let t = `VM RAM ${gb(v.ram_used)} / ${gb(v.ram_total)} GB · CPU ${Math.round(v.cpu_avg ?? 0)}% of ${v.cpu_threads} threads`;
+    let t = `RAM ${gb(v.ram_used)}/${gb(v.ram_total)} GB · CPU ${Math.round(v.cpu_avg ?? 0)}%`;
     if (v.swap_used > 104857600) t += ` · swap ${gb(v.swap_used)} GB`;
     $('res').textContent = t;
   } catch (e) { $('res').textContent = ''; }
@@ -301,17 +375,101 @@ $('go').onclick = async () => {
         document.querySelectorAll('#accts input').forEach(i => i.checked = false); await refresh(); }
   catch (e) { $('err').textContent = e.message; }
 };
-$('all').onclick = () => document.querySelectorAll('#accts input:not(:disabled)').forEach(i => i.checked = true);
+$('all').onclick = () => { document.querySelectorAll('#accts input:not(:disabled)').forEach(i => i.checked = true); accLabel(); };
 $('stopall').onclick = () => { if (confirm('Stop all launched bots?')) api('/api/launch/stop', { slots: [] }).then(refresh); };
 $('clear').onclick = () => api('/api/launch/clear', {}).then(refresh);
 
-function setMin(min) {
-  $('top').classList.toggle('min', min); $('toggle').textContent = min ? 'Show controls' : 'Hide controls';
-  try { localStorage.setItem('osrs-min', min ? '1' : ''); } catch (e) {}
-  layout();
+// dropdown panels: open one at a time, close on a click elsewhere
+for (const id of ['ddAcc', 'ddRun']) {
+  const dd = $(id);
+  dd.querySelector('.ddb').onclick = (e) => { e.stopPropagation(); const open = !dd.classList.contains('open');
+    document.querySelectorAll('.dd.open').forEach(x => x.classList.remove('open')); dd.classList.toggle('open', open); };
+  dd.querySelector('.ddp').addEventListener('click', (e) => e.stopPropagation());
 }
-$('toggle').onclick = () => setMin(!$('top').classList.contains('min'));
-try { if (localStorage.getItem('osrs-min')) setMin(true); } catch (e) {}
+document.addEventListener('click', () => document.querySelectorAll('.dd.open').forEach(x => x.classList.remove('open')));
+$('none').onclick = () => { document.querySelectorAll('#accts input').forEach(i => i.checked = false); accLabel(); };
+
+// ------------------------------------------------------------- bot settings
+// A few settings per bot, saved into each chosen account's slot (or every slot with a login).
+const PCT = (k, label) => ({ k, label, kind: 'pct' });
+const HABITS = [PCT('alt_tab_chance', 'Alt-tab chance (per minute)'), PCT('walk_away_chance', 'Walk-away chance'),
+  PCT('skip_hover_chance', 'Quick clicks (no mouse-over check)'), PCT('misclick_chance', 'Misclick chance')];
+const TREES = { 'Tree': ['Chop down Tree', 'Logs'], 'Oak': ['Chop down Oak', 'Oak logs'], 'Willow': ['Chop down Willow', 'Willow logs'] };
+const FORMS = {
+  woodcutter: [
+    { k: 'drop_items', label: 'Logs when the inventory is full', kind: 'select', opts: [['true', 'Drop them'], ['false', 'Bank them']],
+      note: 'Banking walks the saved bank route (default: Draynor willows ↔ Draynor bank).' },
+    { k: 'tree', label: 'Trees to cut', kind: 'tree' },
+    { k: 'max_trees_before_forced_break', label: 'Short break after N trees without one (0 = off)', kind: 'int' },
+  ],
+  slayer: [
+    { k: 'targets', label: 'Monsters to attack', kind: 'list', ph: 'Cow, Chicken' },
+    { k: 'loot', label: 'Pick up loot', kind: 'bool' },
+    { k: 'loot_use', label: 'Loot to use at once (bury / eat)', kind: 'list', ph: 'Bones' },
+    { k: 'loot_keep', label: 'Loot to keep (for banking)', kind: 'list', ph: 'Cowhide' },
+    { k: 'min_hp', label: 'Rest below HP %', kind: 'int' },
+    { k: 'resume_hp', label: 'Fight again at HP %', kind: 'int' },
+    { k: 'max_kills_before_forced_break', label: 'Short break after N kills without one', kind: 'int' },
+  ],
+};
+let cfgSlots = [], cfgBot = '', cfgLoaded = null;
+function cfgTargets() {
+  const sel = [...document.querySelectorAll('#accts input:checked')].map(i => +i.value);
+  return sel.length ? sel : Object.keys(names).filter(n => names[n]).map(Number);
+}
+$('cfgopen').onclick = async () => {
+  cfgBot = $('bot').value; $('cfgout').textContent = ''; $('cfgbody').innerHTML = '';
+  if (cfgBot === 'freeroam') { $('err').textContent = 'Free roam has no settings.'; return; }
+  cfgSlots = cfgTargets();
+  if (!cfgSlots.length) { $('err').textContent = 'No account with a login.'; return; }
+  $('cfgt').textContent = `${$('bot').selectedOptions[0].textContent} – settings`;
+  $('cfgfor').textContent = `For: ${cfgSlots.map(n => `${n} ${names[n] || ''}`).join(', ')}` +
+    (document.querySelector('#accts input:checked') ? '' : ' (no account chosen: all of them)');
+  $('cfgd').showModal();
+  try { cfgLoaded = await api(`/api/slot/${cfgSlots[0]}/botcfg/${cfgBot}`); }
+  catch (e) { $('cfgout').textContent = 'Couldn\'t read the settings: ' + e.message; return; }
+  const fields = [...(FORMS[cfgBot] || []), ...HABITS.filter(f => f.k in cfgLoaded)];
+  const body = $('cfgbody');
+  const v = (k) => (cfgLoaded[k] || {}).value;
+  for (const f of fields) {
+    if (f.k === 'alt_tab_chance') { const h = document.createElement('h3'); h.textContent = 'Habits'; body.appendChild(h); }
+    if (f.kind !== 'tree' && !(f.k in cfgLoaded)) continue;
+    const l = document.createElement('label'); l.textContent = f.label; let inp;
+    if (f.kind === 'select') { inp = document.createElement('select');
+      for (const [val, t] of f.opts) { const o = document.createElement('option'); o.value = val; o.textContent = t; inp.appendChild(o); }
+      inp.value = String(v(f.k)); }
+    else if (f.kind === 'tree') { inp = document.createElement('select');
+      for (const t of Object.keys(TREES)) { const o = document.createElement('option'); o.value = t; o.textContent = t; inp.appendChild(o); }
+      const hv = v('tree_hover') || ''; inp.value = Object.keys(TREES).find(t => TREES[t][0] === hv) || 'Tree'; }
+    else if (f.kind === 'bool') { inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = !!v(f.k); }
+    else if (f.kind === 'list') { inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = f.ph || '';
+      inp.value = (v(f.k) || []).join(', '); }
+    else if (f.kind === 'int') { inp = document.createElement('input'); inp.type = 'number'; inp.value = v(f.k); }
+    else { inp = document.createElement('input'); inp.type = 'number'; inp.step = '0.1'; inp.min = 0; inp.max = 100;
+      inp.value = +(100 * (v(f.k) || 0)).toFixed(2); l.title = 'in %'; }
+    inp.dataset.k = f.k; inp.dataset.kind = f.kind; l.appendChild(inp); body.appendChild(l);
+    if (f.note) { const d = document.createElement('div'); d.className = 'small'; d.textContent = f.note; body.appendChild(d); }
+  }
+};
+$('cfgclose').onclick = () => $('cfgd').close();
+$('cfgsave').onclick = async () => {
+  const out = {};
+  for (const inp of $('cfgbody').querySelectorAll('[data-k]')) {
+    const k = inp.dataset.k, kind = inp.dataset.kind;
+    if (kind === 'select') out[k] = inp.value === 'true';
+    else if (kind === 'tree') { out.tree_hover = TREES[inp.value][0]; out.log_type = { name: TREES[inp.value][1] }; }
+    else if (kind === 'bool') out[k] = inp.checked;
+    else if (kind === 'list') out[k] = inp.value.split(',').map(x => x.trim()).filter(Boolean);
+    else if (kind === 'int') out[k] = Math.round(+inp.value || 0);
+    else out[k] = Math.max(0, Math.min(1, (+inp.value || 0) / 100));
+  }
+  const lines = [];
+  for (const n of cfgSlots) {
+    try { const r = await api(`/api/slot/${n}/botcfg/${cfgBot}`, out); lines.push(`${n} ${names[n] || ''}: ${r.ok ? 'saved' : 'failed'}`); }
+    catch (e) { lines.push(`${n} ${names[n] || ''}: ${e.message}`); }
+  }
+  $('cfgout').textContent = lines.join('\n') + '\n(used from the next launch)';
+};
 
 // ------------------------------------------------------------- screens
 // Shown: every slot that is launched (waiting, starting or running).
@@ -329,7 +487,7 @@ function syncScreens() {
   for (const n of want) if (!tiles[n]) {                      // newly launched: open
     const el = document.createElement('div'); el.className = 'tile';
     const inner = document.createElement('div'); inner.className = 'inner';
-    const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.textContent = `${n} · ${names[n] || ''}`;
+    const lbl = document.createElement('div'); lbl.className = 'lbl';
     const msg = document.createElement('div'); msg.className = 'msg'; msg.textContent = 'connecting…';
     el.append(inner, msg, lbl);
     el.addEventListener('mouseenter', () => el.classList.add('focus'));

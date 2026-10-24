@@ -77,7 +77,7 @@ class Camera:
         works from any zoom), back in HOME_ZOOM_IN notches, tilt straight down."""
         self.client.bring_to_focus()
         x1, y1, x2, y2 = GAME_VIEW
-        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)), rand_move_chance=0)
+        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))
         time.sleep(random.uniform(0.08, 0.2))
         self._scroll(-1, FULL_ZOOM_OUT_NOTCHES)
         if self.home_zoom_in:
@@ -100,7 +100,7 @@ class Camera:
         if not notches:
             return 0
         x1, y1, x2, y2 = GAME_VIEW
-        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)), rand_move_chance=0)
+        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))
         time.sleep(random.uniform(0.08, 0.2))
         self._scroll(1 if notches > 0 else -1, abs(notches))
         self.zoom = target
