@@ -61,7 +61,7 @@ class BotConfig(BotConfigMixin):
     alt_tab_medium: RangeParam = RangeParam(25.0, 90.0)     # s
     alt_tab_medium_chance: FloatParam = FloatParam(0.22)
     # Walk-away: after dropping/banking, sometimes a few steps via the minimap.
-    walk_away_chance: FloatParam = FloatParam(0.018)
+    walk_away_chance: FloatParam = FloatParam(0.0)        # off until pathfinding exists (it got the bots lost)
     walk_away_cooldown: FloatParam = FloatParam(300.0)     # s
     walk_away_tiles: RangeParam = RangeParam(3, 8)
     walk_away_pause: RangeParam = RangeParam(0.8, 2.2)
