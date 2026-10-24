@@ -269,6 +269,48 @@ class HumanMixin:
             return True
         return False
 
+    # ------------------------------------------------------------ inventory clicks
+    INV_MARGIN = 5      # px kept clear of the slot's edge
+    INV_MIN_DIST = 4    # px: never (almost) the same pixel as one of the recent clicks
+
+    def inv_slot(self, m):
+        """The whole inventory slot (36x32) an item match lies in - aim there, not at the
+        template's box."""
+        from core import inventory
+        from core.region_match import MatchResult
+        cx, cy = m.get_center()
+        col = max(0, min(3, round((cx - inventory.ORIGIN[0] - inventory.SLOT[0] / 2) / inventory.STEP[0])))
+        row = max(0, min(6, round((cy - inventory.ORIGIN[1] - inventory.SLOT[1] / 2) / inventory.STEP[1])))
+        x, y = inventory.ORIGIN[0] + col * inventory.STEP[0], inventory.ORIGIN[1] + row * inventory.STEP[1]
+        return MatchResult(x, y, x + inventory.SLOT[0], y + inventory.SLOT[1])
+
+    def inv_point(self, m) -> tuple[int, int]:
+        """A random point in the item's slot, mostly near the middle, and never within a
+        few px of the last clicks there (a player never hits the same pixel twice)."""
+        slot = self.inv_slot(m)
+        sx, sy, ex, ey = slot.bounding_box
+        sx, sy, ex, ey = sx + self.INV_MARGIN, sy + self.INV_MARGIN, ex - self.INV_MARGIN, ey - self.INV_MARGIN
+        cx, cy = (sx + ex) / 2, (sy + ey) / 2
+        recent = getattr(self, "_inv_recent", None)
+        if recent is None:
+            recent = self._inv_recent = []
+        pt = (int(cx), int(cy))
+        for _ in range(40):
+            pt = (int(round(min(ex, max(sx, random.gauss(cx, (ex - sx) / 4))))),
+                  int(round(min(ey, max(sy, random.gauss(cy, (ey - sy) / 4))))))
+            if all(abs(pt[0] - q[0]) + abs(pt[1] - q[1]) >= self.INV_MIN_DIST for q in recent):
+                break
+        recent.append(pt)
+        del recent[:-8]
+        return pt
+
+    def click_inv(self, m, **kw) -> None:
+        """Click an inventory item at a fresh random spot of its slot (speed varies per move)."""
+        self.client.click(self.inv_point(m), **kw)
+
+    def move_inv(self, m) -> None:
+        self.client.move_to(self.inv_point(m))
+
     # ------------------------------------------------------------ quick / double clicks
     def quick_click(self, target, **kw) -> bool:
         """A click without the mouse-over check; with double_click_chance it clicks a

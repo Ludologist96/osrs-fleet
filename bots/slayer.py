@@ -827,7 +827,7 @@ class BotExecutor(HumanMixin, Bot):
         for r in sorted(cand, key=lambda r: (r.start_y, r.start_x)):
             if self.terminate:
                 break
-            self.client.move_to(r.scale_px(-6).get_point_within())
+            self.move_inv(r)
             time.sleep(random.uniform(0.08, 0.15))
             # sometimes drop at once; otherwise the mouse-over must show an item and must not
             # name one we want (e.g. "Bury Bones")
@@ -1058,7 +1058,7 @@ class BotExecutor(HumanMixin, Bot):
         try:
             keyboard.press("shift")
             for r in new:
-                self.client.click(r.scale_px(-6))
+                self.click_inv(r)
                 time.sleep(random.uniform(0.15, 0.3))
         finally:
             keyboard.release("shift")
@@ -1207,6 +1207,18 @@ class BotExecutor(HumanMixin, Bot):
             self.log.debug(f"Mouse-over {answers} isn't {wanted}")
         return False
 
+    def _hover_click_inv(self, m, wanted: list[str], tries: int = 2) -> bool:
+        """Like hover_click, for an inventory item: a fresh random spot in its slot each try."""
+        for _ in range(tries):
+            self.move_inv(m)
+            time.sleep(random.uniform(0.05, 0.12))
+            answers = self.client.get_hover_texts()
+            if any(self.text_matches(a, w) for a in answers for w in wanted):
+                click(-1, -1)
+                return True
+            self.log.debug(f"Mouse-over {answers} isn't {wanted}")
+        return False
+
     def menu_pick(self, wanted: list[str]) -> bool:
         """Read the open right-click menu line by line and click the first wanted entry."""
         try:
@@ -1261,8 +1273,8 @@ class BotExecutor(HumanMixin, Bot):
             if self.terminate:
                 break
             if random.random() < self.cfg.quick_use_chance.value:
-                self.quick_click(m.scale_px(-6))
-            elif not self.hover_click(m.scale_px(-6), wanted, tries=2):
+                self.quick_click(self.inv_point(m))
+            elif not self._hover_click_inv(m, wanted, tries=2):
                 self.log.debug("Inventory item's mouse-over didn't match")
             if i < len(items) - 1:
                 time.sleep(self.cfg.use_delay.choose())
@@ -1276,7 +1288,7 @@ class BotExecutor(HumanMixin, Bot):
             for i, m in enumerate(left):
                 if self.terminate:
                     break
-                if not self.hover_click(m.scale_px(-6), wanted, tries=3):
+                if not self._hover_click_inv(m, wanted, tries=3):
                     self.log.debug("Inventory item's mouse-over didn't match; trying the next one")
                     continue
                 used += 1

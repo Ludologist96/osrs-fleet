@@ -467,27 +467,26 @@ class BotExecutor(HumanMixin, Bot):
         """Left-click the tinderbox, then the log. Sometimes without reading the mouse-over
         first (skip_hover_chance). No double clicks here: a second click would select the log."""
         quick = random.random() < self.cfg.skip_hover_chance.value
-        t_rect = tinder.scale_px(-6)
         if quick:
-            self.client.click(t_rect)
+            self.click_inv(tinder)
         else:
-            self.client.move_to(t_rect.get_point_within())
+            self.move_inv(tinder)
             time.sleep(random.uniform(0.06, 0.14))
             if not self._hover_has("tinderbox"):
+                self._tinder = None  # not there any more: look for it again
                 return False
             from core.input.mouse_control import press
             press()
         time.sleep(self.cfg.fire_click_gap.choose())
-        l_rect = log.scale_px(-6)
         quick = random.random() < self.cfg.skip_hover_chance.value
         if quick:
-            self.client.click(l_rect)
+            self.click_inv(log)
             return True
-        self.client.move_to(l_rect.get_point_within())
+        self.move_inv(log)
         time.sleep(random.uniform(0.06, 0.14))
         if not self._hover_has("tinderbox", "log"):
             # tinderbox still selected: click it again to put it down
-            self.client.click(t_rect)
+            self.click_inv(tinder)
             return False
         from core.input.mouse_control import press
         press()
@@ -519,10 +518,15 @@ class BotExecutor(HumanMixin, Bot):
             logs = self._inv(name)
             if not logs:
                 break
-            tinder = self._inv(self.cfg.tinderbox.name)
-            if not tinder:
-                self.log.error("No tinderbox in the inventory: can't light the logs")
-                return burned
+            # the tinderbox stays in its slot: find it once per run
+            if getattr(self, "_tinder", None) is None:
+                found = self._inv(self.cfg.tinderbox.name)
+                if not found:
+                    self.log.error("No tinderbox in the inventory: can't light the logs")
+                    return burned
+                self._tinder = self.inv_slot(found[0])
+                self.log.info(f"Tinderbox in inventory slot at {self._tinder.bounding_box[:2]}")
+            tinder = [self._tinder]
             self.set_activity("firemaking")
             lit = False
             for attempt in range(1 + int(self.cfg.fire_moves.value)):
@@ -548,6 +552,7 @@ class BotExecutor(HumanMixin, Bot):
                 logs = self._inv(name) or logs
             if not lit:
                 self.log.warning("Gave up lighting this log")
+                self._tinder = None  # check where the tinderbox is next time
                 break
             burned += 1
             self.count("burned")
@@ -614,7 +619,7 @@ class BotExecutor(HumanMixin, Bot):
             try:
                 keyboard.press('shift')
                 for rect in order:
-                    self.client.click(rect.scale_px(-6))
+                    self.click_inv(rect)
                     time.sleep(random.uniform(0.1, 0.3))
             finally:
                 keyboard.release('shift')

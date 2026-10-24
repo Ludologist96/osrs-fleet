@@ -357,7 +357,7 @@ def move_to(
         return
 
     # one speed for this whole move (some moves quick, some lazy)
-    move_speed_factor = min(1.6, max(0.7, random.lognormvariate(0, 0.18)))
+    move_speed_factor = min(1.8, max(0.6, random.lognormvariate(0, 0.28)))
 
     # ── pick way-points  ───────────────
     
