@@ -43,6 +43,9 @@ class Camera:
         self.zoom_max = zoom_max
         self.zoom = 0  # + = zoomed in (bots start in the home view: top_down())
         self.search_dir: str | None = None  # keep turning one way while searching
+        # False = never turn left/right (the minimap keeps its orientation, e.g. so a bot
+        # can find its way back by matching the minimap); fidgets then zoom/tilt only.
+        self.allow_rotate = True
         self.log = get_logger("Camera")
 
     # ------------------------------------------------------------------
@@ -110,8 +113,8 @@ class Camera:
     # ------------------------------------------------------------------
     def random_move(self, rotate_time: tuple[float, float], zoom_chance: float = 0.5) -> None:
         """A small, player-like camera fidget: rotate, maybe zoom, maybe tilt up."""
-        moves = ["rotate"]
-        if random.random() < zoom_chance:
+        moves = ["rotate"] if self.allow_rotate else []
+        if random.random() < zoom_chance or not moves:
             moves.append("zoom")
         if random.random() < 0.25:
             moves.append("tilt")
@@ -138,8 +141,9 @@ class Camera:
         Every few attempts also zoom out and tilt up to see further."""
         if attempt <= 1 or not self.search_dir:
             self.search_dir = random.choice(("left", "right"))
-        self.rotate(random.uniform(*rotate_time), self.search_dir)
-        if attempt % 3 == 0:
+        if self.allow_rotate:
+            self.rotate(random.uniform(*rotate_time), self.search_dir)
+        if attempt % 3 == 0 or not self.allow_rotate:
             self.zoom_by(-random.randint(1, 2))
             self.tilt_up(random.uniform(0.3, 0.8))
         if random.random() < RETURN_TOP_DOWN_CHANCE:

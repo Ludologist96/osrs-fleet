@@ -108,6 +108,7 @@ class BotConfig(BotConfigMixin):
     fire_timeout_max: FloatParam = FloatParam(60.0)    # s kneeling until the fire catches (low level: long)
     fire_step_px: FloatParam = FloatParam(1.0)         # minimap move (px) = the character stepped off the fire
     fire_step_diff: FloatParam = FloatParam(8.0)       # ...or this much change of the minimap picture
+    home_match: FloatParam = FloatParam(0.45)          # minimap match needed to walk back to the trees
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 3)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
@@ -176,6 +177,11 @@ class BotExecutor(HumanMixin, Bot):
         self.camera = Camera(self.client, self.cfg.zoom_min.value, self.cfg.zoom_max.value,
                              self.cfg.start_zoom_in.value)
         self.chopped_once = False
+        # firemaking: no left/right camera turns, so the minimap keeps its orientation and
+        # the bot can walk back to the trees by finding a remembered minimap patch
+        self._home = None
+        if self.cfg.burn_logs.value:
+            self.camera.allow_rotate = False
         self._last_used: int | None = None  # inventory slots used at the last look (log counter)
         
         if not self.cfg.drop_items.value and not self.cfg.bank_to_trees.value:
@@ -238,6 +244,9 @@ class BotExecutor(HumanMixin, Bot):
                             if self.tree_waits > self.cfg.max_tree_waits.value:
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
+                            # firemaking drifts away from the trees (one tile per fire): go back
+                            if self.cfg.burn_logs.value and self.tree_waits >= 2 and self.go_home():
+                                continue
                             # all stumps: a good moment to wander a few steps
                             if self.tree_waits >= 2 and self.maybe_walk_away(prefer=True):
                                 continue
@@ -407,6 +416,8 @@ class BotExecutor(HumanMixin, Bot):
             t_click = time.time()
         time.sleep(self.cfg.chop_click_delay.choose())
         started = self._wait_for_chop_start()
+        if started and self.cfg.burn_logs.value:
+            self._remember_home()
         self.micro_idle()
         if started:
             wait = t_click + random.uniform(1.0, 2.0) - time.time()
@@ -509,6 +520,50 @@ class BotExecutor(HumanMixin, Bot):
         w, h = x2 - x1, y2 - y1
         box = (x1 + w // 5, y1 + h // 5, x2 - w // 5, y2 - h // 5)
         return np.asarray(sc.convert("L").crop(box), dtype=np.float32)
+
+    HOME_PATCH = 15  # px half-size of the remembered minimap patch (~7 tiles across)
+
+    def _minimap_full(self):
+        """(grey minimap image, its top-left in window coords, centre in window coords)."""
+        import numpy as np
+        sc = self.client.get_screenshot()
+        mm = self.client.minimap.map
+        x1, y1, x2, y2 = mm.bounding_box
+        cx, cy = mm.get_center()
+        return np.asarray(sc.convert("L").crop((x1, y1, x2, y2)), dtype=np.float32), (x1, y1), (cx, cy)
+
+    def _remember_home(self) -> None:
+        """Chopping started: the trees are around here. Remember the middle of the minimap."""
+        img, (x1, y1), (cx, cy) = self._minimap_full()
+        h = self.HOME_PATCH
+        px, py = int(cx - x1), int(cy - y1)
+        patch = img[py - h:py + h, px - h:px + h]
+        if patch.shape == (2 * h, 2 * h):
+            self._home = patch.copy()
+
+    def go_home(self) -> bool:
+        """No marked tree in sight: find the remembered patch on the minimap and walk there
+        (the camera doesn't turn in firemaking mode, so the minimap orientation is the same)."""
+        import cv2
+        if self._home is None:
+            return False
+        img, (x1, y1), (cx, cy) = self._minimap_full()
+        res = cv2.matchTemplate(img, self._home, cv2.TM_CCOEFF_NORMED)
+        _, score, _, (mx, my) = cv2.minMaxLoc(res)
+        hx, hy = x1 + mx + self.HOME_PATCH, y1 + my + self.HOME_PATCH
+        dist = ((hx - cx) ** 2 + (hy - cy) ** 2) ** 0.5
+        self.log.info(f"Back to the trees: minimap match {score:.2f}, {dist:.0f}px from here")
+        if score < self.cfg.home_match.value or dist < 4:
+            return False
+        r = min(self.client.minimap.map.width, self.client.minimap.map.height) / 2 - 10
+        if dist > r:  # click the edge of the minimap in that direction, then look again
+            hx, hy = cx + (hx - cx) * r / dist, cy + (hy - cy) * r / dist
+        self.set_activity("walking")
+        self.client.click((int(hx + random.uniform(-2, 2)), int(hy + random.uniform(-2, 2))))
+        self.sleep_checked(1.0 + dist / 4 * 0.6 * random.uniform(0.8, 1.1))  # ~0.6 s a tile
+        self.set_activity("working")
+        self.tree_waits = 0
+        return True
 
     @staticmethod
     def _shift(a, b) -> tuple[float, float]:
