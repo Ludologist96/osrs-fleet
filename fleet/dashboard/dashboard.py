@@ -172,6 +172,16 @@ ACTIONS = {
 }
 
 
+def _app_http(method: str, n: int, path: str, body: dict | None = None, timeout: float = 10):
+    """Call slot N's bot app (its web UI API on 8010+N)."""
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"http://127.0.0.1:{8010 + n}{path}", data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read() or b"null")
+
+
 def start_update(*args: str) -> dict:
     """Run `fleetctl update` (or another fleetctl command) outside this service - it
     restarts the dashboard at the end. Its log: /api/update-log/<unit>."""
@@ -291,6 +301,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"processes": slot_processes(uid)})
         elif path == "/api/bots":
             self._json({"bots": bot_list()})
+        elif m := re.fullmatch(r"/api/slot/(\d+)/botcfg/([a-z0-9_]+)", path):
+            # slot N's saved settings of a bot (the launcher's bot settings dialog)
+            n = int(m.group(1))
+            if not 1 <= n <= SLOTS:
+                return self._json({"error": "bad slot"}, 400)
+            try:
+                self._json(_app_http("GET", n, f"/api/bot/{m.group(2)}/config"))
+            except Exception as e:
+                self._json({"error": str(e)}, 502)
         elif m := re.fullmatch(r"/api/slot/(\d+)/world", path):
             # Which login world slot N's RuneLite is set to (Default World plugin).
             import glob
@@ -406,6 +425,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "slots like 1-5 or 1,2,3"}, 400)
             args = ["proxy", "import"] + ([spec] if spec else []) + (["--forget"] if b.get("forget") else [])
             return self._json(start_update(*args))
+        if m := re.fullmatch(r"/api/slot/(\d+)/botcfg/([a-z0-9_]+)", self.path):
+            # {"drop_items": true, ...}: change some of slot N's saved settings of a bot
+            n = int(m.group(1))
+            if not 1 <= n <= SLOTS:
+                return self._json({"ok": False, "error": "bad slot"}, 400)
+            try:
+                r = _app_http("POST", n, f"/api/bot/{m.group(2)}/config", self._body())
+                return self._json({"ok": bool(r and r.get("success")), "result": r})
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 502)
         if m := re.fullmatch(r"/api/slot/(\d+)/fit-window", self.path):
             from launcher import fit_window
             return self._json({"ok": True, "moved": fit_window(int(m.group(1)))})

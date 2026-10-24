@@ -57,6 +57,12 @@ class Bot:
         self.camera = Camera(self.client)
         # Stopping a bot (stop button, timed stop) logs the character out afterwards.
         self.logout_on_stop = True
+        # What the bot is doing right now (shown in the launcher / Telegram): working,
+        # fighting, looting, banking, dropping, resting, roaming, alt tab...
+        # Breaks and logins are added by the bot manager from ScriptControl.
+        self.activity = "starting"
+        # Things done this run, e.g. {"logs": 120, "kills": 40} (report at the end).
+        self.counts: dict = {}
         
         
     def _log_back_in(self):
@@ -236,4 +242,4 @@ class Bot:
 
     @terminate.setter
     def terminate(self, value: bool):
-        self.control.terminate = value
+        self.control.terminate = value

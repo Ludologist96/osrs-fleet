@@ -239,6 +239,7 @@ class Launcher:
                 r = dict(r)
                 r["starts_in"] = max(0, int(r["start_at"] - now))
                 r["stops_in"] = max(0, int(r["stop_at"] - now))
+                r["activity"] = self._activity(r)
                 out[k] = r
             return {"now": now, "runs": out}
 
@@ -275,8 +276,10 @@ class Launcher:
                 if not r or r["status"] in ("done", "error", "stopped", "dead"):
                     continue
                 if r["status"] == "running" and r["bot"] != FREEROAM:
+                    self._final_counts(n, r)
                     self._stop_bot(n, r["bot"])
                 r.update(status="stopped", msg="stopped by you", stop_at=time.time())
+                r.pop("activity_now", None)
             self._save()
         return self.status()
 
@@ -309,16 +312,21 @@ class Launcher:
                     if r["bot"] == FREEROAM:
                         self._set(n, status="done", msg="free roam over")
                         continue
+                    with _lock:
+                        self._final_counts(n, self.runs[str(n)])
                     self._stop_bot(n, r["bot"])
-                    self._set(n, status="done", msg="run time over, bot stopped")
+                    self._set(n, status="done", msg="run time over, bot stopped", activity_now=None)
                 elif r["bot"] == FREEROAM:
                     continue
                 else:
                     info = self._bot_info(n, r["bot"])
                     st = info.get("status") if info else None
+                    if info:
+                        self._note_info(n, info)
                     if st not in ("running", "paused", None) and info.get("reason") == "died":
                         # leave a dead character alone (no restart); Telegram sends an alert
-                        self._set(n, status="dead", msg="the character died; bot stopped, left it there")
+                        self._set(n, status="dead", msg="the character died; bot stopped, left it there",
+                                  activity_now=None, ran_s=time.time() - r.get("began_at", r["start_at"]))
                     elif st not in ("running", "paused", None):
                         # stopped unexpectedly (bot app restarted by an update, or a crash):
                         # start it again a few times before giving up
@@ -329,7 +337,8 @@ class Launcher:
                                       msg=f"bot stopped ({st}); restarting it")
                             threading.Thread(target=self._resume, args=(n, r["bot"]), daemon=True).start()
                         else:
-                            self._set(n, status="error", msg=f"bot stopped on its own ({st}) 3 times; see its log")
+                            self._set(n, status="error", msg=f"bot stopped on its own ({st}) 3 times; see its log",
+                                      activity_now=None, ran_s=time.time() - r.get("began_at", r["start_at"]))
 
     def _cancelled(self, n: int) -> bool:
         with _lock:
@@ -434,7 +443,7 @@ class Launcher:
                 r = self.runs[str(n)]
                 r["stop_at"] = time.time() + (r["stop_at"] - r["start_at"])
                 where = f" on world {r['world']}" if r.get("world") else ""
-                r.update(status="running", msg=f"{bot} running{where}")
+                r.update(status="running", msg=f"{bot} running{where}", began_at=time.time(), counts={})
                 self._save()
         except Exception as e:
             if not self._cancelled(n):
@@ -450,6 +459,41 @@ class Launcher:
             self._set(n, msg=f"{bot} running (restarted)", resuming=False)
         except Exception as e:
             self._set(n, msg=f"restart failed: {e}", resuming=False)
+
+    @staticmethod
+    def _activity(r: dict) -> str:
+        """What the account is doing, for the launcher page and Telegram."""
+        st = r.get("status")
+        if st == "running":
+            if r.get("bot") == FREEROAM:
+                return "free roam"
+            if r.get("resuming"):
+                return "restarting"
+            return r.get("activity_now") or "working"
+        if st == "starting":
+            return "logging in" if "log" in (r.get("msg") or "") else "starting"
+        return st or ""
+
+    def _note_info(self, n: int, info: dict):
+        """Remember the bot's current activity and counters (no file write for the
+        activity alone - it changes often; counters are saved with the next save)."""
+        with _lock:
+            r = self.runs.get(str(n))
+            if not r or r.get("status") != "running":
+                return
+            if info.get("activity"):
+                r["activity_now"] = info["activity"]
+            c = info.get("counts")
+            if isinstance(c, dict) and c and c != r.get("counts"):
+                r["counts"] = c
+                self._save()
+
+    def _final_counts(self, n: int, r: dict):
+        """Before stopping a bot: keep its last counters and how long it ran."""
+        info = self._bot_info(n, r["bot"])
+        if info and isinstance(info.get("counts"), dict) and info["counts"]:
+            r["counts"] = info["counts"]
+        r["ran_s"] = time.time() - r.get("began_at", r["start_at"])
 
     def _bot_info(self, n: int, bot: str) -> dict | None:
         try:
