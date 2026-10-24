@@ -157,6 +157,10 @@ class BotConfig(BotConfigMixin):
     # pile (cows: cowhide/raw beef can lie over the bones): a wrong item is dropped again
     # at once, and the mouse-over-checked pick-up follows.
     quick_loot: BooleanParam = BooleanParam(True)
+    # Share of pick-ups that try the quick click first. Measured Oct 2026 on cows: with every
+    # pick-up quick, pick-ups took 10-18 s and often failed (the click walks the character
+    # onto the pile, the item is then hidden under it); mouse-over only: 4-6 s, all worked.
+    quick_loot_chance: FloatParam = FloatParam(0.0)
     # After a click, sometimes a short extra pause.
     micro_idle_chance: FloatParam = FloatParam(0.07)
     micro_idle: RangeParam = RangeParam(0.25, 0.9)
@@ -550,8 +554,8 @@ class BotExecutor(HumanMixin, Bot):
             t1 = time.time()
             self.pick_up_loot(before)
             t2 = time.time()
+            self.drop_junk(snap)  # before burying: a bone being buried must not look like junk
             self.use_items()
-            self.drop_junk(snap)
             t3 = time.time()
             self.log.info(f"Timing: fight {fight_s:.1f}s, drop wait {t1 - t0:.1f}s, "
                           f"pick-up {t2 - t1:.1f}s, use {t3 - t2:.1f}s")
@@ -572,7 +576,7 @@ class BotExecutor(HumanMixin, Bot):
         grown = cv2.dilate(before.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
         deadline = time.time() + max(0.0, hi - lo)
         while time.time() < deadline and not self.terminate:
-            if int((self._loot_mask() & ~grown).sum()) >= 25:
+            if int((self._near_player(self._loot_mask()) & ~grown).sum()) >= 25:
                 time.sleep(self.cfg.loot_react.choose())
                 return
             time.sleep(random.uniform(0.08, 0.15))
@@ -810,16 +814,30 @@ class BotExecutor(HumanMixin, Bot):
             f" ({why.get(id(r), '?')})" for r in sorted(cand, key=lambda r: (r.start_y, r.start_x))))
         self.save_debug_shot("drop-junk")
         from core.input import keys as keyboard
-        try:
-            keyboard.press("shift")
-            for r in sorted(cand, key=lambda r: (r.start_y, r.start_x)):
-                self.client.click(r.scale_px(-6))
-                time.sleep(random.uniform(0.15, 0.3))
-        finally:
-            keyboard.release("shift")
-        self.count("dropped", len(cand))
+        from core.input.mouse_control import press
+        wanted_hover = [f"* {w}" for w in wanted]
+        dropped = 0
+        for r in sorted(cand, key=lambda r: (r.start_y, r.start_x)):
+            if self.terminate:
+                break
+            # last check: the mouse-over must not name an item we want (e.g. "Bury Bones")
+            self.client.move_to(r.scale_px(-6).get_point_within())
+            time.sleep(random.uniform(0.08, 0.15))
+            texts = self.client.get_hover_texts()
+            if wanted_hover and any(self.text_matches(t, w) for t in texts for w in wanted_hover):
+                self.log.info(f"Not dropping: mouse-over says {texts}")
+                continue
+            try:
+                keyboard.press("shift")
+                time.sleep(random.uniform(0.05, 0.12))
+                press()
+            finally:
+                keyboard.release("shift")
+            dropped += 1
+            time.sleep(random.uniform(0.12, 0.25))
+        self.count("dropped", dropped)
         self.set_activity(prev or "looking for a target")
-        return len(cand)
+        return dropped
 
     def _wanted_loot(self) -> list[str]:
         """Item names worth picking up now (keep-items only while there's room for them)."""
@@ -837,6 +855,16 @@ class BotExecutor(HumanMixin, Bot):
         from core import inventory
         self._open_inventory()
         return 28 - len(inventory.used_slots(self.client.get_screenshot()))
+
+    def _near_player(self, mask: np.ndarray) -> np.ndarray:
+        """Only the purple within loot_max_distance of the character: the monster died next
+        to us, so its drop is there. Labels of other players' loot further away (they become
+        takeable after a while) once fooled the drop detection."""
+        h, w = mask.shape
+        px, py = self._player_point()
+        r = int(self.cfg.loot_max_distance.value)
+        yy, xx = np.ogrid[:h, :w]
+        return mask & (((xx - px) ** 2 + (yy - py) ** 2) <= r * r)
 
     def _loot_mask(self) -> np.ndarray:
         """Ground Items highlight (tile outlines + item names) as a pixel mask."""
@@ -931,7 +959,7 @@ class BotExecutor(HumanMixin, Bot):
             now = self._loot_mask()
             if i == 0 and before is not None:
                 grown = cv2.dilate(before.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
-                pts = self._pile_points(now & ~grown)
+                pts = self._pile_points(self._near_player(now) & ~grown)
                 if not pts:
                     self.log.info("No new drop seen (nothing dropped, or it fell out of view)")
             else:
@@ -984,7 +1012,7 @@ class BotExecutor(HumanMixin, Bot):
         after instant_check s. "" = not tried, "ok" = got a wanted item, "miss" = nothing
         taken, "wrong" = took another item (dropped again). Skipped when a highlighted
         monster covers the spot (the click would attack it)."""
-        if not self.cfg.quick_loot.value:
+        if not self.cfg.quick_loot.value or random.random() >= self.cfg.quick_loot_chance.value:
             return ""
         try:
             if any(t.scale_px(4).contains(*pt) for t in self.find_targets()):

@@ -393,7 +393,8 @@ $('none').onclick = () => { document.querySelectorAll('#accts input').forEach(i 
 // A few settings per bot, saved into each chosen account's slot (or every slot with a login).
 const PCT = (k, label) => ({ k, label, kind: 'pct' });
 const HABITS = [PCT('alt_tab_chance', 'Alt-tab chance (per minute)'), PCT('walk_away_chance', 'Walk-away chance'),
-  PCT('skip_hover_chance', 'Quick clicks (no mouse-over check)'), PCT('misclick_chance', 'Misclick chance')];
+  PCT('skip_hover_chance', 'Quick clicks (no mouse-over check)'), PCT('quick_loot_chance', 'Quick loot clicks (miss often)'),
+  PCT('misclick_chance', 'Misclick chance')];
 const TREES = { 'Tree': ['Chop down Tree', 'Logs'], 'Oak': ['Chop down Oak', 'Oak logs'], 'Willow': ['Chop down Willow', 'Willow logs'] };
 const FORMS = {
   woodcutter: [
