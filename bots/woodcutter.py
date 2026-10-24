@@ -153,6 +153,10 @@ class BotConfig(BotConfigMixin):
     # inv_full_at: IntParam = IntParam(28)  # Default inventory capacity
     
     
+class WoodcutterShift:
+    last = None
+
+
 class BotExecutor(HumanMixin, Bot):
     name: str = "Woodcutter Bot"
     description: str = "A bot that chops trees and banks or drops logs when inventory is full"
@@ -517,6 +521,7 @@ class BotExecutor(HumanMixin, Bot):
             return 0.0
         win = cv2.createHanningWindow(a.shape[::-1], cv2.CV_32F)
         (dx, dy), resp = cv2.phaseCorrelate(a, b, win)
+        WoodcutterShift.last = (round(dx, 1), round(dy, 1), round(resp, 2), float(np.abs(a - b).mean()))
         return float(np.hypot(dx, dy)) if resp > 0.05 else 0.0
 
     def _wait_lit(self, slot: MatchResult) -> str:
@@ -546,6 +551,7 @@ class BotExecutor(HumanMixin, Bot):
                     self.log.debug(f"Lighting started ({time.time() - t0:.1f}s after the click)")
                 continue
             moved = self._shift(ref, self._minimap_gray())
+            self.log.debug(f"Minimap shift dx,dy,resp,diff = {WoodcutterShift.last} (box {ref.shape})")
             if moved >= self.cfg.fire_step_px.value:
                 self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (stepped: minimap moved {moved:.1f}px)")
                 return "lit"
