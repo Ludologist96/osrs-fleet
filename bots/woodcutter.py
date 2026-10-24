@@ -104,7 +104,8 @@ class BotConfig(BotConfigMixin):
     # already there, a blocked tile) it walks a few tiles and tries again.
     burn_logs: BooleanParam = BooleanParam(False)
     tinderbox: ItemParam = ItemParam("Tinderbox")
-    fire_timeout: FloatParam = FloatParam(12.0)        # s for one log to catch fire (low level: several tries)
+    fire_timeout: FloatParam = FloatParam(12.0)        # s without any sign of lighting -> click again
+    fire_timeout_max: FloatParam = FloatParam(60.0)    # s while the chat says it's still trying (low level)
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 3)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
@@ -492,21 +493,68 @@ class BotExecutor(HumanMixin, Bot):
         press()
         return True
 
-    def _wait_lit(self, name: str, before: int) -> bool:
-        """Wait until a log is gone from the inventory (the fire is lit). Meanwhile maybe
-        alt-tab (1-2 s after the click), like while chopping."""
+    def _slot_empty(self, slot: MatchResult) -> bool:
+        used = inventory.used_slots(self.client.get_screenshot())
+        return not any(abs(r.start_x - slot.start_x) < 4 and abs(r.start_y - slot.start_y) < 4 for r in used)
+
+    def _chat_tail(self, n: int = 2) -> list[str]:
+        """The newest chat lines (bottom of the chat box), without the typing line."""
+        try:
+            text = self.client.get_chat_text()
+        except ScriptTerminationException:
+            raise
+        except Exception:
+            return []
+        lines = [l.strip().lower() for l in text.splitlines() if l.strip()]
+        lines = [l for l in lines if not l.endswith("*")]  # "Name: *" = the typing line
+        return lines[-n:]
+
+    @staticmethod
+    def _fire_msg(line: str) -> str | None:
+        """'blocked' / 'trying' / 'lit' from one chat line (OCR-tolerant)."""
+        l = line.replace("'", "").replace("`", "")
+        if "fire here" in l or "cant light" in l or "can t light" in l:
+            return "blocked"
+        if "catches" in l or "begin to burn" in l or "logs begin" in l:
+            return "lit"
+        if "attempt" in l and "light" in l:
+            return "trying"
+        return None
+
+    def _wait_lit(self, slot: MatchResult) -> str:
+        """After the log click: 'lit' (its slot is empty twice in a row), 'blocked' (chat:
+        can't light a fire here) or 'failed' (no sign of lighting). While the chat says it
+        is still trying, wait up to fire_timeout_max (low levels take many tries)."""
+        from core.camera import GAME_VIEW
+        # the mouse off the inventory: the cursor over the log hid it (looked "lit")
+        x1, y1, x2, y2 = GAME_VIEW
+        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))
         t0 = time.time()
-        deadline = t0 + float(self.cfg.fire_timeout.value)
-        tabbed = False
-        while time.time() < deadline and not self.terminate:
-            time.sleep(random.uniform(0.4, 0.7))
-            if len(self._inv(name)) < before:
-                return True
+        short = t0 + float(self.cfg.fire_timeout.value)
+        hard = t0 + float(self.cfg.fire_timeout_max.value)
+        trying, empties, tabbed = False, 0, False
+        next_chat = t0 + random.uniform(0.9, 1.4)
+        while not self.terminate and time.time() < (hard if trying else short):
+            time.sleep(random.uniform(0.45, 0.7))
+            if self._slot_empty(slot):
+                empties += 1
+                if empties >= 2:
+                    return "lit"
+                continue
+            empties = 0
+            if time.time() >= next_chat:
+                msgs = [self._fire_msg(l) for l in self._chat_tail()]
+                if "blocked" in msgs and "lit" not in msgs:
+                    return "blocked"
+                if ("trying" in msgs or "lit" in msgs) and not trying:
+                    trying = True
+                    self.log.debug(f"Still lighting (chat: {self._chat_tail()})")
+                next_chat = time.time() + random.uniform(1.5, 2.5)
             if not tabbed and time.time() - t0 >= random.uniform(1.0, 2.0):
                 tabbed = True
-                if self.maybe_alt_tab(lambda: len(self._inv(name)) >= before, "fire lighting"):
-                    deadline = max(deadline, time.time() + 3)
-        return False
+                if self.maybe_alt_tab(lambda: not self._slot_empty(slot), "fire lighting"):
+                    short = max(short, time.time() + 3)
+        return "failed"
 
     def burn_logs(self) -> int:
         """Light every log in the inventory, one after another."""
@@ -529,22 +577,35 @@ class BotExecutor(HumanMixin, Bot):
             tinder = [self._tinder]
             self.set_activity("firemaking")
             lit = False
-            for attempt in range(1 + int(self.cfg.fire_moves.value)):
+            moves = 0
+            for attempt in range(3 + int(self.cfg.fire_moves.value)):
                 if self.terminate:
                     break
                 log = random.choice(logs[:3])  # not always the first one
                 if not self._use_tinderbox_on(tinder[0], log):
                     self.log.debug("Tinderbox/log mouse-over didn't match; trying again")
                     time.sleep(random.uniform(0.3, 0.7))
+                    logs = self._inv(name) or logs
                     continue
                 self.micro_idle()
-                if self._wait_lit(name, len(logs)):
+                t_fire = time.time()
+                res = self._wait_lit(self.inv_slot(log))
+                if res == "lit":
                     lit = True
+                    self.log.debug(f"Lit after {time.time() - t_fire:.1f}s")
                     break
-                # no fire: something is already burning here or the tile is blocked
+                if res == "failed":
+                    # no sign of lighting at all (the click didn't take): just try again
+                    self.log.info("No fire and no 'attempt' in the chat: using the tinderbox again")
+                    logs = self._inv(name) or logs
+                    continue
+                # blocked: a fire is already here / the tile doesn't allow one
+                if moves >= int(self.cfg.fire_moves.value):
+                    break
+                moves += 1
                 tiles = self.cfg.fire_move_tiles.choose()
-                self.log.info(f"Couldn't light a fire here: moving {tiles:.0f} tile(s) "
-                              f"({attempt + 1}/{1 + int(self.cfg.fire_moves.value)})")
+                self.log.info(f"Can't light a fire here: moving {tiles:.0f} tile(s) "
+                              f"({moves}/{int(self.cfg.fire_moves.value)})")
                 self.set_activity("walking")
                 self.minimap_step(tiles)
                 time.sleep(random.uniform(0.8, 1.4) + tiles * 0.5)
