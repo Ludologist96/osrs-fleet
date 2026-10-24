@@ -149,8 +149,8 @@ class BotConfig(BotConfigMixin):
     # Bury/eat: click at once, check after this long; only then the mouse-over way.
     instant_check: RangeParam = RangeParam(0.6, 1.1)
     # Loot: the same quick click on the pile first. A plain click takes the TOP item of a
-    # pile (cows: cowhide/raw beef can lie over the bones): a wrong item is dropped again,
-    # and after 2 wrong ones the quick click stops for the rest of the run.
+    # pile (cows: cowhide/raw beef can lie over the bones): a wrong item is dropped again
+    # at once, and the mouse-over-checked pick-up follows.
     quick_loot: BooleanParam = BooleanParam(True)
     # After a click, sometimes a short extra pause.
     micro_idle_chance: FloatParam = FloatParam(0.07)
@@ -909,7 +909,7 @@ class BotExecutor(HumanMixin, Bot):
         after instant_check s. "" = not tried, "ok" = got a wanted item, "miss" = nothing
         taken, "wrong" = took another item (dropped again). Skipped when a highlighted
         monster covers the spot (the click would attack it)."""
-        if not self.cfg.quick_loot.value or getattr(self, "_quick_loot_off", False):
+        if not self.cfg.quick_loot.value:
             return ""
         try:
             if any(t.scale_px(4).contains(*pt) for t in self.find_targets()):
@@ -942,9 +942,6 @@ class BotExecutor(HumanMixin, Bot):
                 time.sleep(random.uniform(0.15, 0.3))
         finally:
             keyboard.release("shift")
-        if self._wrong_quick >= 2:
-            self._quick_loot_off = True
-            self.log.info("Quick loot clicks keep taking the wrong item here: mouse-over only from now on")
         return "wrong"
 
     def _zoom_in_for_pile(self, pts: list[tuple[int, int]]) -> list[tuple[int, int]]:
