@@ -99,6 +99,7 @@ class BotConfig(BotConfigMixin):
     # looting (a quick click takes the top item of a pile) is dropped again, and these are
     # always dropped when seen (also at the start) - unless listed in loot_use / loot_keep.
     junk_items: StringListParam = StringListParam(["Cowhide", "Raw beef"])
+    junk_confidence: FloatParam = FloatParam(0.95)  # icon match needed to drop by name
     loot_color: RGBParam = RGBParam(170, 0, 255)  # Ground Items highlight colour (purple)
     # After a kill the drop appears when the death animation ends: watch for it from
     # loot_wait's low end, give up at its high end; react loot_react after it shows.
@@ -771,18 +772,27 @@ class BotExecutor(HumanMixin, Bot):
         low = {w.lower() for w in wanted}
         junk = [j for j in self.cfg.junk_items.value if j.lower() not in low]
         now = self._used_slots()
-        cand = []
+        cand, why = [], {}
         if before is not None:
-            cand = [r for r in now if not any(b.contains(*r.get_center()) for b in before)]
+            for r in now:
+                if not any(b.contains(*r.get_center()) for b in before):
+                    cand.append(r)
+                    why[id(r)] = "new while looting"
         if junk:
-            try:
-                for m in self.client.get_inv_items(junk, min_confidence=0.85, verify_tab=False):
+            # strict match: a junk name must never catch another item (e.g. a clue scroll)
+            for name in junk:
+                try:
+                    found = self.client.get_inv_items([name], min_confidence=self.cfg.junk_confidence.value,
+                                                      verify_tab=False)
+                except Exception:
+                    self.log.debug(f"Junk check for {name} failed", exc_info=True)
+                    continue
+                for m in found:
                     cx, cy = m.get_center()
                     slot = next((r for r in now if r.contains(cx, cy)), None)
                     if slot is not None and slot not in cand:
                         cand.append(slot)
-            except Exception:
-                self.log.debug("Junk check failed", exc_info=True)
+                        why[id(slot)] = name
         if cand and wanted:
             try:
                 keep = [m.get_center() for m in self.client.get_inv_items(wanted, min_confidence=0.85,
@@ -792,9 +802,13 @@ class BotExecutor(HumanMixin, Bot):
             cand = [r for r in cand if not any(r.contains(*p) for p in keep)]
         if not cand:
             return 0
+        from core import inventory
         prev = getattr(self, "activity", "")
         self.set_activity("dropping")
-        self.log.info(f"Dropping {len(cand)} unwanted item(s)")
+        self.log.info(f"Dropping {len(cand)} unwanted item(s): " + ", ".join(
+            f"slot {1 + (r.start_y - inventory.ORIGIN[1]) // inventory.STEP[1] * 4 + (r.start_x - inventory.ORIGIN[0]) // inventory.STEP[0]}"
+            f" ({why.get(id(r), '?')})" for r in sorted(cand, key=lambda r: (r.start_y, r.start_x))))
+        self.save_debug_shot("drop-junk")
         from core.input import keys as keyboard
         try:
             keyboard.press("shift")
