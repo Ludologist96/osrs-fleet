@@ -199,7 +199,7 @@ class BotExecutor(HumanMixin, Bot):
             # the run starts at the trees: remember them now (a restart mid-run too)
             try:
                 self.remember_home()
-                self.log.info("Firemaking: remembered the minimap around the trees")
+                self.log.info("Firemaking: remembered the minimap around the trees (the start area)")
             except Exception:
                 self.log.warning("Couldn't remember the tree area yet", exc_info=True)
         
@@ -209,7 +209,15 @@ class BotExecutor(HumanMixin, Bot):
                     break
                 # Check if inventory is full
                 if self.check_inventory_full():
-                    if self.cfg.drop_items.value:
+                    if self.cfg.drop_items.value and self.cfg.burn_logs.value:
+                        # firemaking: light all logs once the inventory is full, then back to the trees
+                        self.log.info("Inventory is full. Lighting the logs...")
+                        self.burn_logs()
+                        self.go_home(max_tiles=2, label="the trees")
+                        if self.check_inventory_full():  # some logs couldn't be lit: drop them
+                            self.set_activity("dropping")
+                            self.drop_logs()
+                    elif self.cfg.drop_items.value:
                         self.log.info("Inventory is full. Dropping logs...")
                         self.set_activity("dropping")
                         self.drop_logs()
@@ -225,10 +233,6 @@ class BotExecutor(HumanMixin, Bot):
                 
                 # Check if we're woodcutting, if not, click on tree
                 if not self.client.is_woodcutting:
-                    # firemaking: the tree fell - light the logs first
-                    if self.cfg.burn_logs.value:
-                        if self.burn_logs():
-                            self.go_home(max_tiles=self.cfg.home_max_tiles.value, rotations=False)
                     try:
                         self.log.info("Not woodcutting. Clicking tree...")
                         self.set_activity("working")
@@ -253,8 +257,8 @@ class BotExecutor(HumanMixin, Bot):
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
                             # firemaking drifts away from the trees (one tile per fire): go back
-                            if self.cfg.burn_logs.value and self.tree_waits >= 3 \
-                                    and self.go_home(self.cfg.home_max_tiles.value, rotations=False):
+                            if self.cfg.burn_logs.value and self.tree_waits >= 2 \
+                                    and self.go_home(max_tiles=3, label="the trees"):
                                 self.tree_waits = 0
                                 continue
                             # all stumps: a good moment to wander a few steps
@@ -426,8 +430,6 @@ class BotExecutor(HumanMixin, Bot):
             t_click = time.time()
         time.sleep(self.cfg.chop_click_delay.choose())
         started = self._wait_for_chop_start()
-        if started and self.cfg.burn_logs.value:
-            self.remember_home()
         self.micro_idle()
         if started:
             wait = t_click + random.uniform(1.0, 2.0) - time.time()
@@ -594,12 +596,72 @@ class BotExecutor(HumanMixin, Bot):
         px, diff = self._shift(ref, self._minimap_gray())
         return px >= self.cfg.fire_step_px.value or diff >= self.cfg.fire_step_diff.value
 
-    def _wait_lit(self, slot: MatchResult) -> str:
+    # ------------------------------------------------------------ chat (newest line)
+    CANT_LIGHT = ("light a fire here", "cant light", "can't light")
+    FIRE_CAUGHT = ("fire catches", "begin to burn")
+    LIGHTING = ("attempt to light",)
+
+    def _chat_box(self, sc=None):
+        """Grey image of the chat messages (to notice a new message cheaply)."""
+        import numpy as np
+        sc = sc or self.client.get_screenshot()
+        c = self.client.sectors.chat
+        return np.asarray(sc.convert("L").crop((c.start_x + 6, c.start_y + 4, c.end_x - 17, c.end_y - 22)),
+                          dtype=np.float32)
+
+    def _chat_newest(self, sc=None) -> str:
+        """OCR of the newest chat message line (just above the typing line), lower case."""
+        from core import ocr
+        sc = sc or self.client.get_screenshot()
+        c = self.client.sectors.chat
+        line = sc.crop((c.start_x + 6, c.end_y - 37, c.end_x - 17, c.end_y - 22))
+        line = line.resize((line.width * 2, line.height * 2))
+        try:
+            return ocr.execute(line, font=ocr.FontChoice.RUNESCAPE_PLAIN_12, psm=ocr.TessPsm.SINGLE_LINE,
+                               raise_on_blank=False, preprocess=True).lower().replace("’", "'")
+        except Exception:
+            self.log.debug("chat OCR failed", exc_info=True)
+            return ""
+
+    @staticmethod
+    def _says(text: str, phrases) -> bool:
+        from difflib import SequenceMatcher
+        t = text.replace("'", "")
+        for p in phrases:
+            p2 = p.replace("'", "")
+            if p2 in t:
+                return True
+            n = len(p2)
+            if any(SequenceMatcher(None, t[i:i + n], p2).ratio() >= 0.8 for i in range(0, max(1, len(t) - n + 1))):
+                return True
+        return False
+
+    def _chat_event(self, before):
+        """(event, chat image now): 'cant' / 'caught' / 'lighting' when the chat got a new
+        message saying so, else None. `before` = the chat image last looked at."""
+        import numpy as np
+        sc = self.client.get_screenshot()
+        now = self._chat_box(sc)
+        if before is None or now.shape != before.shape or float(np.abs(now - before).mean()) < 0.4:
+            return None, now
+        text = self._chat_newest(sc)
+        self.log.debug(f"Chat: {text!r}")
+        if self._says(text, self.CANT_LIGHT):
+            return "cant", now
+        if self._says(text, self.FIRE_CAUGHT):
+            return "caught", now
+        if self._says(text, self.LIGHTING):
+            return "lighting", now
+        return None, now
+
+    def _wait_lit(self, slot: MatchResult, chat_before=None) -> str:
         """After the log click. The game puts the log on the ground at once - its slot is
         empty long before the fire burns - and the character kneels until the fire catches,
         then steps off it (one tile). Clicking anything before that stops the lighting.
-        So: started = the log left its slot; lit = then the minimap moved (the step).
-        Returns 'lit', 'blocked' (the log never left: a fire is already here) or 'failed'."""
+        Signals: the chat ("You can't light a fire here." / "You attempt to light the logs." /
+        "The fire catches..."), the log leaving its slot, the minimap moving (the step).
+        Returns 'lit', 'cant' (chat: no fire possible on this tile), 'blocked' (nothing
+        happened - usually a missed click) or 'failed'."""
         from core.camera import GAME_VIEW
         # the mouse off the inventory (natural, and the cursor hid the log)
         x1, y1, x2, y2 = GAME_VIEW
@@ -608,14 +670,26 @@ class BotExecutor(HumanMixin, Bot):
         started = False
         ref = None
         tabbed = False
+        chat = chat_before
         while not self.terminate:
             elapsed = time.time() - t0
             limit = self.cfg.fire_timeout_max.value if started else self.cfg.fire_timeout.value
             if elapsed > limit:
                 break
-            time.sleep(random.uniform(0.45, 0.7))
+            time.sleep(random.uniform(0.25, 0.45))
+            try:
+                ev, chat = self._chat_event(chat)
+            except Exception:
+                ev = None
+                self.log.debug("chat check failed", exc_info=True)
+            if ev == "cant":
+                self.log.info(f"Chat: can't light a fire here ({time.time() - t0:.1f}s after the click)")
+                return "cant"
+            if ev == "caught":
+                self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (chat)")
+                return "lit"
             if not started:
-                if self._slot_empty(slot):
+                if ev == "lighting" or self._slot_empty(slot):
                     started = True
                     ref = self._minimap_gray()
                     self.log.debug(f"Lighting started ({time.time() - t0:.1f}s after the click)")
@@ -627,9 +701,10 @@ class BotExecutor(HumanMixin, Bot):
             if not tabbed and elapsed >= random.uniform(1.0, 2.0):
                 tabbed = True
                 if self.maybe_alt_tab(lambda: not self._stepped(ref), "fire lighting"):
+                    chat = None  # the chat may have changed meanwhile: don't read old news
                     continue
         if not started:
-            return "blocked"  # the log stayed in the inventory: no fire possible on this tile
+            return "blocked"  # nothing happened: usually the click missed
         self.log.debug(f"No fire after {time.time() - t0:.0f}s")
         return "failed"
 
@@ -653,6 +728,8 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.info(f"Tinderbox in inventory slot at {self._tinder.bounding_box[:2]}")
             tinder = [self._tinder]
             self.set_activity("firemaking")
+            # each fire moves the character a tile: don't let the line of fires lead it away
+            self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
             lit = False
             moves = 0
             careful = False
@@ -660,6 +737,10 @@ class BotExecutor(HumanMixin, Bot):
                 if self.terminate:
                     break
                 log = random.choice(logs[:3])  # not always the first one
+                try:
+                    chat_before = self._chat_box()
+                except Exception:
+                    chat_before = None
                 if not self._use_tinderbox_on(tinder[0], log, careful):
                     self.log.debug("Tinderbox/log mouse-over didn't match; trying again")
                     time.sleep(random.uniform(0.3, 0.7))
@@ -667,7 +748,7 @@ class BotExecutor(HumanMixin, Bot):
                     continue
                 self.micro_idle()
                 t_fire = time.time()
-                res = self._wait_lit(self.inv_slot(log))
+                res = self._wait_lit(self.inv_slot(log), chat_before)
                 if res == "lit":
                     lit = True
                     self.log.debug(f"Lit after {time.time() - t_fire:.1f}s")
@@ -678,9 +759,9 @@ class BotExecutor(HumanMixin, Bot):
                         break  # the log lies on the ground unlit; nothing left to light
                     self.log.info("No fire: using the tinderbox again")
                     continue
-                # blocked: the log never left. Often a quick click just missed (the log got
+                # blocked: nothing happened. Often a quick click just missed (the log got
                 # selected instead): first try again right here, reading the mouse-over.
-                if not careful:
+                if res == "blocked" and not careful:
                     careful = True
                     self.log.info("Lighting didn't start: trying again here (mouse-over checked)")
                     logs = self._inv(name) or logs
@@ -690,14 +771,10 @@ class BotExecutor(HumanMixin, Bot):
                 if moves >= int(self.cfg.fire_moves.value):
                     break
                 moves += 1
-                tiles = self.cfg.fire_move_tiles.choose()
-                self.log.info(f"Can't light a fire here: moving {tiles:.0f} tile(s) "
+                self.log.info(f"Can't light a fire here: one step aside "
                               f"({moves}/{int(self.cfg.fire_moves.value)})")
                 self.set_activity("walking")
-                found = self.find_home(rotations=False)
-                self.minimap_step(tiles, toward=found[0] if found else None,
-                                  label="Moving for a free fire spot")
-                time.sleep(random.uniform(0.8, 1.4) + tiles * 0.5)
+                self.step_aside()
                 self.set_activity("firemaking")
                 logs = self._inv(name) or logs
             if not lit:

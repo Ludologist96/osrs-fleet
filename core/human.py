@@ -264,7 +264,7 @@ class HumanMixin:
         """Click the minimap `tiles` away from the player. `toward` = a minimap point: go
         roughly that way (+-`spread` degrees) instead of a random direction."""
         mm = self.client.minimap.map
-        cx, cy = self.player_dot()
+        cx, cy = mm.get_center()  # the player dot sits within ~1 px of it (measured)
         r = min(mm.width, mm.height) / 2 - 8
         dist = min(r, tiles * self.MINIMAP_PX_PER_TILE)
         if toward is not None and (toward[0] - cx or toward[1] - cy):
@@ -280,23 +280,27 @@ class HumanMixin:
     # Remember the minimap around the start area and walk back when the bot wandered off
     # (firemaking steps, chasing monsters, loot). The minimap turns with the camera, so the
     # remembered patch is also tried rotated: works whatever way the camera faces now.
-    HOME_R = 21      # px radius kept (the rotated 30x30 core always fits inside it)
-    HOME_PATCH = 15  # px half-size of the patch matched (~7 tiles across)
+    HOME_R = 32      # px radius kept (the rotated 44x44 core always fits inside it)
+    HOME_PATCH = 22  # px half-size of the patch matched (~11 tiles across)
     HOME_ANGLE_STEP = 6  # degrees between the tried rotations
 
     def _minimap_full(self):
-        """(grey minimap image, its top-left in window coords, centre in window coords)."""
+        """(grey minimap image, its top-left in window coords, centre in window coords).
+        Median-filtered: the moving dots (NPCs yellow, players white, items/ashes red) are
+        2-4 px and vanish, the map (paths, walls, icons) stays. Measured on the real
+        minimap: plain grey matched the start area at 0.38-0.58, filtered at 0.72-0.85."""
+        import cv2
         import numpy as np
         sc = self.client.get_screenshot()
         mm = self.client.minimap.map
         x1, y1, x2, y2 = mm.bounding_box
         cx, cy = mm.get_center()
-        return np.asarray(sc.convert("L").crop((x1, y1, x2, y2)), dtype=np.float32), (x1, y1), (cx, cy)
+        g = np.asarray(sc.convert("L").crop((x1, y1, x2, y2)), dtype=np.uint8)
+        return cv2.medianBlur(g, 5).astype(np.float32), (x1, y1), (cx, cy)
 
     def remember_home(self) -> bool:
         """The character stands in its work area: remember the minimap around it."""
-        img, (x1, y1), _ = self._minimap_full()
-        cx, cy = self.player_dot()
+        img, (x1, y1), (cx, cy) = self._minimap_full()
         r = self.HOME_R
         px, py = int(round(cx - x1)), int(round(cy - y1))
         patch = img[py - r:py + r, px - r:px + r]
@@ -312,10 +316,10 @@ class HumanMixin:
         home = getattr(self, "_home_patch", None)
         if home is None:
             return None
-        img, (x1, y1), _ = self._minimap_full()
-        cx, cy = self.player_dot()
+        img, (x1, y1), (cx, cy) = self._minimap_full()
         r, h = self.HOME_R, self.HOME_PATCH
         best = (-1.0, None)
+        thr = float(_v(self.cfg, "home_match", 0.6))
         angles = range(0, 360, self.HOME_ANGLE_STEP) if rotations else (0,)
         for a in angles:
             if a:
@@ -328,15 +332,17 @@ class HumanMixin:
             _, score, _, loc = cv2.minMaxLoc(res)
             if score > best[0]:
                 best = (score, loc)
+            if a == 0 and score >= thr + 0.1:
+                break  # the camera didn't turn: no need to try the rotations
         score, loc = best
-        if loc is None or score < float(_v(self.cfg, "home_match", 0.45)):
+        if loc is None or score < thr:
             self.log.debug(f"Start area not found on the minimap (best match {score:.2f})")
             return None
         hx, hy = x1 + loc[0] + h, y1 + loc[1] + h
         self._home_score = score
         return (hx, hy), math.hypot(hx - cx, hy - cy)
 
-    def go_home(self, max_tiles: float = 1.0, rotations: bool = True) -> bool:
+    def go_home(self, max_tiles: float = 1.0, rotations: bool = True, label: str = "the start area") -> bool:
         """Walk back toward the remembered area if it is more than `max_tiles` away.
         Too far for one minimap click: click the minimap edge that way (look again later)."""
         found = self.find_home(rotations)
@@ -345,10 +351,10 @@ class HumanMixin:
         (hx, hy), dist = found
         if dist < max(4.0, max_tiles * self.MINIMAP_PX_PER_TILE):
             return False
-        self.log.info(f"Back to the start area: {dist / self.MINIMAP_PX_PER_TILE:.0f} tiles away "
+        self.log.info(f"Back to {label}: {dist / self.MINIMAP_PX_PER_TILE:.0f} tiles away "
                       f"(minimap match {getattr(self, '_home_score', 0):.2f})")
         mm = self.client.minimap.map
-        cx, cy = self.player_dot()
+        cx, cy = mm.get_center()
         rad = min(mm.width, mm.height) / 2 - 14
         if dist > rad:
             hx, hy = cx + (hx - cx) * rad / dist, cy + (hy - cy) * rad / dist
@@ -357,6 +363,38 @@ class HumanMixin:
         self.sleep_checked(1.0 + min(dist, rad) / self.MINIMAP_PX_PER_TILE * 0.6 * random.uniform(0.8, 1.1))
         self.set_activity("working")
         return True
+
+    # ------------------------------------------------------------ one step aside
+    PLAYER_PT = (260, 168)  # window coords: the character stands in the middle of the game view
+
+    def step_aside(self, tries: int = 6) -> bool:
+        """One small step: click the ground right next to the character in the game view
+        (30-42 px away ~ one tile at the bots' zoom), only where the mouse-over says
+        "Walk here" (not a tree, fire, NPC...). Falls back to a 1-tile minimap click."""
+        from core.input.mouse_control import press
+        px, py = self.PLAYER_PT
+        start = random.uniform(0, 360)
+        for i in range(tries):
+            ang = math.radians(start + i * random.uniform(50, 70))
+            d = random.uniform(30, 42)
+            pt = (int(px + d * math.cos(ang)), int(py + d * 0.8 * math.sin(ang)))
+            self.client.move_to(pt)
+            time.sleep(random.uniform(0.1, 0.18))
+            try:
+                texts = [t.lower().strip() for t in self.client.get_hover_texts()]
+            except Exception:
+                texts = []
+            words = " ".join(texts)
+            # '' from the hover readers usually means "Walk here" too
+            if ("walk" in words or not words) and not any(w in words for w in ("chop", "fire", "attack", "take", "talk", "use ")):
+                press()
+                self.log.info(f"Step aside: clicked the ground next to the character at {pt}")
+                time.sleep(random.uniform(0.9, 1.3))
+                return True
+            self.log.debug(f"Step aside: {pt} is not plain ground ({texts})")
+        self.minimap_step(1, label="Step aside (minimap)")
+        time.sleep(random.uniform(1.0, 1.4))
+        return False
 
     # ------------------------------------------------------------ misclick
     def maybe_misclick(self, point: tuple[int, int], avoid=None) -> bool:

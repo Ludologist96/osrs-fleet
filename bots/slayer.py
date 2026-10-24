@@ -116,7 +116,7 @@ class BotConfig(BotConfigMixin):
     return_home: BooleanParam = BooleanParam(True)  # walk back when it wandered off (chasing, loot)
     home_max_tiles: FloatParam = FloatParam(10.0)   # after a kill: farther than this -> walk back
     home_idle_tiles: FloatParam = FloatParam(4.0)   # nothing to attack: farther than this -> walk back
-    home_match: FloatParam = FloatParam(0.45)       # minimap match needed to find the start area
+    home_match: FloatParam = FloatParam(0.6)        # minimap match needed to find the start area
 
     # --- nothing to attack ---
     no_target_wait: RangeParam = RangeParam(0.8, 2.2)
