@@ -55,11 +55,11 @@ class BotConfig(BotConfigMixin):
 
     # --- player habits (core/human.py) ---
     # Alt-tab: 1-2 s after a tree click, sometimes look at another window for a while.
-    alt_tab_chance: FloatParam = FloatParam(0.06)
+    alt_tab_chance: FloatParam = FloatParam(0.107)  # per roll: short 9.4% (doubled), medium 1.3%
     alt_tab_cooldown: FloatParam = FloatParam(60.0)        # s between two rolls
     alt_tab_short: RangeParam = RangeParam(4.0, 18.0)       # s
     alt_tab_medium: RangeParam = RangeParam(25.0, 90.0)     # s
-    alt_tab_medium_chance: FloatParam = FloatParam(0.22)
+    alt_tab_medium_chance: FloatParam = FloatParam(0.123)
     # Walk-away: after dropping/banking, sometimes a few steps via the minimap.
     walk_away_chance: FloatParam = FloatParam(0.0)        # off until pathfinding exists (it got the bots lost)
     walk_away_cooldown: FloatParam = FloatParam(300.0)     # s
