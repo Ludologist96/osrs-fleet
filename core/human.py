@@ -269,6 +269,28 @@ class HumanMixin:
             return True
         return False
 
+    # ------------------------------------------------------------ quick / double clicks
+    def quick_click(self, target, **kw) -> bool:
+        """A click without the mouse-over check; with double_click_chance it clicks a
+        second time fast on the same spot (like an impatient player). True = doubled."""
+        double = random.random() < float(_v(self.cfg, "double_click_chance", 0) or 0)
+        if double:
+            interval = random.uniform(*_v(self.cfg, "double_click_gap", (0.08, 0.16)))
+            self.client.click(target, click_cnt=2, min_click_interval=interval, **kw)
+        else:
+            self.client.click(target, **kw)
+        return double
+
+    def double_press(self) -> bool:
+        """After a raw press(): with double_click_chance a second fast press, same spot."""
+        if random.random() >= float(_v(self.cfg, "double_click_chance", 0) or 0):
+            return False
+        from core.input.mouse_control import press
+        lo, hi = _v(self.cfg, "double_click_gap", (0.08, 0.16))
+        time.sleep(random.uniform(lo, hi))
+        press()
+        return True
+
     # ------------------------------------------------------------ status
     def set_activity(self, what: str) -> None:
         self.activity = what

@@ -165,6 +165,9 @@ class BotConfig(BotConfigMixin):
     # mouse-over check (the rest check it first).
     quick_use_chance: FloatParam = FloatParam(0.40)
     quick_drop_chance: FloatParam = FloatParam(0.40)
+    # A quick click (attack, loot, bury, drop) is sometimes a fast double click.
+    double_click_chance: FloatParam = FloatParam(0.40)
+    double_click_gap: RangeParam = RangeParam(0.08, 0.16)  # s between the two clicks
     # After a click, sometimes a short extra pause.
     micro_idle_chance: FloatParam = FloatParam(0.07)
     micro_idle: RangeParam = RangeParam(0.25, 0.9)
@@ -629,7 +632,7 @@ class BotExecutor(HumanMixin, Bot):
             reach_before = self._chat_image()
             if random.random() < self.cfg.skip_hover_chance.value:
                 pt = inner.get_point_within()
-                self.client.click(pt)
+                self.quick_click(pt)
                 self._t_click = time.time()
                 time.sleep(self.cfg.skip_hover_check.choose())
                 if self.fight_state() == "fighting":
@@ -836,10 +839,13 @@ class BotExecutor(HumanMixin, Bot):
             if wanted_hover and any(self.text_matches(t, w) for t in texts for w in wanted_hover):
                 self.log.info(f"Not dropping: mouse-over says {texts}")
                 continue
+            quick = texts == ["?"]
             try:
                 keyboard.press("shift")
                 time.sleep(random.uniform(0.05, 0.12))
                 press()
+                if quick:
+                    self.double_press()
             finally:
                 keyboard.release("shift")
             dropped += 1
@@ -1034,7 +1040,7 @@ class BotExecutor(HumanMixin, Bot):
         from core import inventory
         self._open_inventory()
         slots_before = inventory.used_slots(self.client.get_screenshot())
-        self.client.click(pt)
+        self.quick_click(pt)
         time.sleep(self.cfg.instant_check.choose())
         if self._count_items(names) > before_items:
             return "ok"
@@ -1255,7 +1261,7 @@ class BotExecutor(HumanMixin, Bot):
             if self.terminate:
                 break
             if random.random() < self.cfg.quick_use_chance.value:
-                self.client.click(m.scale_px(-6))
+                self.quick_click(m.scale_px(-6))
             elif not self.hover_click(m.scale_px(-6), wanted, tries=2):
                 self.log.debug("Inventory item's mouse-over didn't match")
             if i < len(items) - 1:

@@ -70,6 +70,9 @@ class BotConfig(BotConfigMixin):
     # Sometimes click a tree without waiting for its mouse-over text (checked after).
     skip_hover_chance: FloatParam = FloatParam(0.40)
     skip_hover_check: RangeParam = RangeParam(0.9, 1.4)    # s until "is it chopping?"
+    # A quick click is sometimes a fast double click.
+    double_click_chance: FloatParam = FloatParam(0.40)
+    double_click_gap: RangeParam = RangeParam(0.08, 0.16)  # s between the two clicks
     # After a click, sometimes a short extra pause.
     micro_idle_chance: FloatParam = FloatParam(0.07)
     micro_idle: RangeParam = RangeParam(0.25, 0.9)
@@ -371,7 +374,7 @@ class BotExecutor(HumanMixin, Bot):
         started. False = it didn't (walking, wrong spot, wrong tree): caller verifies."""
         pt = target.get_point_within()
         self._wiggle(pt)
-        self.client.click(pt)
+        self.quick_click(pt)
         self.log.debug(f"Clicked a tree without the mouse-over check at {pt}")
         time.sleep(self.cfg.skip_hover_check.choose())
         if self.client.is_woodcutting:
