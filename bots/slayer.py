@@ -809,7 +809,7 @@ class BotExecutor(HumanMixin, Bot):
         from core import inventory
         prev = getattr(self, "activity", "")
         self.set_activity("dropping")
-        self.log.info(f"Dropping {len(cand)} unwanted item(s): " + ", ".join(
+        self.log.info(f"Checking to drop {len(cand)} unwanted item(s): " + ", ".join(
             f"slot {1 + (r.start_y - inventory.ORIGIN[1]) // inventory.STEP[1] * 4 + (r.start_x - inventory.ORIGIN[0]) // inventory.STEP[0]}"
             f" ({why.get(id(r), '?')})" for r in sorted(cand, key=lambda r: (r.start_y, r.start_x))))
         self.save_debug_shot("drop-junk")
@@ -824,6 +824,10 @@ class BotExecutor(HumanMixin, Bot):
             self.client.move_to(r.scale_px(-6).get_point_within())
             time.sleep(random.uniform(0.08, 0.15))
             texts = self.client.get_hover_texts()
+            if not any((t or "").strip() for t in texts):
+                # nothing under the mouse: an empty slot that looked used (a tooltip over it)
+                self.log.debug("Slot looks empty on mouse-over: not dropping")
+                continue
             if wanted_hover and any(self.text_matches(t, w) for t in texts for w in wanted_hover):
                 self.log.info(f"Not dropping: mouse-over says {texts}")
                 continue
@@ -835,7 +839,9 @@ class BotExecutor(HumanMixin, Bot):
                 keyboard.release("shift")
             dropped += 1
             time.sleep(random.uniform(0.12, 0.25))
-        self.count("dropped", dropped)
+        if dropped:
+            self.count("dropped", dropped)
+            self.log.info(f"Dropped {dropped} item(s)")
         self.set_activity(prev or "looking for a target")
         return dropped
 
