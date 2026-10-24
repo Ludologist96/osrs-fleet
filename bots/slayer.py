@@ -919,15 +919,18 @@ class BotExecutor(HumanMixin, Bot):
             return ""
         from core import inventory
         self._open_inventory()
-        slots_before = {(r.start_x, r.start_y) for r in inventory.used_slots(self.client.get_screenshot())}
+        slots_before = inventory.used_slots(self.client.get_screenshot())
         self.client.click(pt)
         time.sleep(self.cfg.instant_check.choose())
         if self._count_items(names) > before_items:
             return "ok"
-        new = [r for r in inventory.used_slots(self.client.get_screenshot())
-               if (r.start_x, r.start_y) not in slots_before]
-        if not new:
+        after = inventory.used_slots(self.client.get_screenshot())
+        if len(after) <= len(slots_before):
             return "miss"
+        # the new slot(s): whose centre lies in no slot that was used before
+        new = [r for r in after if not any(b.contains(*r.get_center()) for b in slots_before)]
+        if not new:
+            new = after[len(slots_before):]  # slots fill in order: the new item is the next one
         # took the top item of the pile, not a wanted one: drop it again
         self._wrong_quick = getattr(self, "_wrong_quick", 0) + 1
         self.log.info(f"Quick click took another item ({self._wrong_quick}x): dropping it")
