@@ -108,10 +108,10 @@ class BotConfig(BotConfigMixin):
     fire_timeout_max: FloatParam = FloatParam(60.0)    # s kneeling until the fire catches (low level: long)
     fire_step_px: FloatParam = FloatParam(1.0)         # minimap move (px) = the character stepped off the fire
     fire_step_diff: FloatParam = FloatParam(8.0)       # ...or this much change of the minimap picture
-    home_match: FloatParam = FloatParam(0.45)          # minimap match needed to walk back to the trees
-    home_max_tiles: FloatParam = FloatParam(5.0)       # firemaking: farther than this from the trees -> walk back
+    home_match: FloatParam = FloatParam(0.6)           # minimap match needed to walk back to the trees
+    home_max_tiles: FloatParam = FloatParam(8.0)       # firemaking: farther than this from the trees -> walk back
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
-    fire_move_tiles: RangeParam = RangeParam(1, 3)
+    fire_move_tiles: RangeParam = RangeParam(1, 1)      # can't light here: step this far (1 tile is enough)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
     fire_step_wait: RangeParam = RangeParam(0.7, 1.3)    # after a fire: the character steps aside
     bank_tile: RGBParam = RGBParam(0, 255, 0)  # Green by default, only used when banking
@@ -253,7 +253,8 @@ class BotExecutor(HumanMixin, Bot):
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
                             # firemaking drifts away from the trees (one tile per fire): go back
-                            if self.cfg.burn_logs.value and self.tree_waits >= 1 and self.go_home(rotations=False):
+                            if self.cfg.burn_logs.value and self.tree_waits >= 3 \
+                                    and self.go_home(self.cfg.home_max_tiles.value, rotations=False):
                                 self.tree_waits = 0
                                 continue
                             # all stumps: a good moment to wander a few steps
@@ -486,32 +487,38 @@ class BotExecutor(HumanMixin, Bot):
             self.log.debug(f"Mouse-over {texts} doesn't name {words}")
         return ok
 
-    def _use_tinderbox_on(self, tinder: MatchResult, log: MatchResult) -> bool:
+    def _use_tinderbox_on(self, tinder: MatchResult, log: MatchResult, careful: bool = False) -> bool:
         """Left-click the tinderbox, then the log. Sometimes without reading the mouse-over
-        first (skip_hover_chance). No double clicks here: a second click would select the log."""
-        quick = random.random() < self.cfg.skip_hover_chance.value
+        first (skip_hover_chance; never when `careful`). No double clicks here: a second click
+        would select the log. If a log is already selected (an earlier click selected it
+        instead), clicking the tinderbox lights it: then the log click is skipped."""
+        from core.input.mouse_control import press
+        quick = not careful and random.random() < self.cfg.skip_hover_chance.value
         if quick:
             self.click_inv(tinder)
         else:
             self.move_inv(tinder)
             time.sleep(random.uniform(0.06, 0.14))
+            if self._hover_has("use", "log"):  # "Use Logs -> Tinderbox": a log is selected
+                self.log.debug("A log was selected: using it on the tinderbox")
+                press()
+                return True
             if not self._hover_has("tinderbox"):
                 self._tinder = None  # not there any more: look for it again
                 return False
-            from core.input.mouse_control import press
             press()
         time.sleep(self.cfg.fire_click_gap.choose())
-        quick = random.random() < self.cfg.skip_hover_chance.value
+        quick = not careful and random.random() < self.cfg.skip_hover_chance.value
         if quick:
             self.click_inv(log)
             return True
         self.move_inv(log)
         time.sleep(random.uniform(0.06, 0.14))
         if not self._hover_has("tinderbox", "log"):
-            # tinderbox still selected: click it again to put it down
-            self.click_inv(tinder)
+            # tinderbox not selected (the click missed) or still selected: put it down
+            if self._hover_has("tinderbox"):
+                self.click_inv(tinder)
             return False
-        from core.input.mouse_control import press
         press()
         return True
 
@@ -608,11 +615,12 @@ class BotExecutor(HumanMixin, Bot):
             self.set_activity("firemaking")
             lit = False
             moves = 0
-            for attempt in range(3 + int(self.cfg.fire_moves.value)):
+            careful = False
+            for attempt in range(4 + int(self.cfg.fire_moves.value)):
                 if self.terminate:
                     break
                 log = random.choice(logs[:3])  # not always the first one
-                if not self._use_tinderbox_on(tinder[0], log):
+                if not self._use_tinderbox_on(tinder[0], log, careful):
                     self.log.debug("Tinderbox/log mouse-over didn't match; trying again")
                     time.sleep(random.uniform(0.3, 0.7))
                     logs = self._inv(name) or logs
@@ -630,7 +638,15 @@ class BotExecutor(HumanMixin, Bot):
                         break  # the log lies on the ground unlit; nothing left to light
                     self.log.info("No fire: using the tinderbox again")
                     continue
-                # blocked: a fire is already here / the tile doesn't allow one
+                # blocked: the log never left. Often a quick click just missed (the log got
+                # selected instead): first try again right here, reading the mouse-over.
+                if not careful:
+                    careful = True
+                    self.log.info("Lighting didn't start: trying again here (mouse-over checked)")
+                    logs = self._inv(name) or logs
+                    continue
+                careful = False
+                # a fire is already here / the tile doesn't allow one: one step aside
                 if moves >= int(self.cfg.fire_moves.value):
                     break
                 moves += 1

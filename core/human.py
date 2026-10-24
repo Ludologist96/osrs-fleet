@@ -233,12 +233,38 @@ class HumanMixin:
 
     MINIMAP_PX_PER_TILE = 4.5  # default minimap zoom (seen: 5-14 px = 1-3 tiles)
 
+    def player_dot(self, sc=None) -> tuple[float, float]:
+        """The player's white dot on the minimap (window coords). The minimap box comes from
+        an offset of the world-map orb and can be a few px off; clicks 1 tile away need the
+        real dot. Falls back to the box centre."""
+        import numpy as np
+        mm = self.client.minimap.map
+        cx, cy = mm.get_center()
+        try:
+            sc = sc or self.client.get_screenshot()
+            r = 10
+            a = np.asarray(sc.convert("RGB").crop((cx - r, cy - r, cx + r, cy + r)), dtype=np.int16)
+            ys, xs = np.nonzero((a.min(axis=2) >= 225))
+            if 2 <= len(xs) <= 40:
+                # the cluster nearest the centre (another player's dot may be close by)
+                d = (xs - r) ** 2 + (ys - r) ** 2
+                k = d.argmin()
+                near = (np.abs(xs - xs[k]) <= 3) & (np.abs(ys - ys[k]) <= 3)
+                px, py = cx - r + xs[near].mean() + 0.5, cy - r + ys[near].mean() + 0.5
+                if not getattr(self, "_dot_logged", False):
+                    self._dot_logged = True
+                    self.log.info(f"Minimap: player dot at {px - cx:+.1f},{py - cy:+.1f} px from the box centre")
+                return px, py
+        except Exception:
+            self.log.debug("player dot not found", exc_info=True)
+        return cx, cy
+
     def minimap_step(self, tiles: float, toward: tuple[float, float] | None = None,
                      spread: float = 50.0, label: str = "Walk-away") -> tuple[int, int]:
         """Click the minimap `tiles` away from the player. `toward` = a minimap point: go
         roughly that way (+-`spread` degrees) instead of a random direction."""
         mm = self.client.minimap.map
-        cx, cy = mm.get_center()
+        cx, cy = self.player_dot()
         r = min(mm.width, mm.height) / 2 - 8
         dist = min(r, tiles * self.MINIMAP_PX_PER_TILE)
         if toward is not None and (toward[0] - cx or toward[1] - cy):
@@ -269,9 +295,10 @@ class HumanMixin:
 
     def remember_home(self) -> bool:
         """The character stands in its work area: remember the minimap around it."""
-        img, (x1, y1), (cx, cy) = self._minimap_full()
+        img, (x1, y1), _ = self._minimap_full()
+        cx, cy = self.player_dot()
         r = self.HOME_R
-        px, py = int(cx - x1), int(cy - y1)
+        px, py = int(round(cx - x1)), int(round(cy - y1))
         patch = img[py - r:py + r, px - r:px + r]
         if patch.shape != (2 * r, 2 * r):
             return False
@@ -285,7 +312,8 @@ class HumanMixin:
         home = getattr(self, "_home_patch", None)
         if home is None:
             return None
-        img, (x1, y1), (cx, cy) = self._minimap_full()
+        img, (x1, y1), _ = self._minimap_full()
+        cx, cy = self.player_dot()
         r, h = self.HOME_R, self.HOME_PATCH
         best = (-1.0, None)
         angles = range(0, 360, self.HOME_ANGLE_STEP) if rotations else (0,)
@@ -305,6 +333,7 @@ class HumanMixin:
             self.log.debug(f"Start area not found on the minimap (best match {score:.2f})")
             return None
         hx, hy = x1 + loc[0] + h, y1 + loc[1] + h
+        self._home_score = score
         return (hx, hy), math.hypot(hx - cx, hy - cy)
 
     def go_home(self, max_tiles: float = 1.0, rotations: bool = True) -> bool:
@@ -316,10 +345,11 @@ class HumanMixin:
         (hx, hy), dist = found
         if dist < max(4.0, max_tiles * self.MINIMAP_PX_PER_TILE):
             return False
-        self.log.info(f"Back to the start area: {dist / self.MINIMAP_PX_PER_TILE:.0f} tiles away")
+        self.log.info(f"Back to the start area: {dist / self.MINIMAP_PX_PER_TILE:.0f} tiles away "
+                      f"(minimap match {getattr(self, '_home_score', 0):.2f})")
         mm = self.client.minimap.map
-        cx, cy = mm.get_center()
-        rad = min(mm.width, mm.height) / 2 - 10
+        cx, cy = self.player_dot()
+        rad = min(mm.width, mm.height) / 2 - 14
         if dist > rad:
             hx, hy = cx + (hx - cx) * rad / dist, cy + (hy - cy) * rad / dist
         self.set_activity("walking")
