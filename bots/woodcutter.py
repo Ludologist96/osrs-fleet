@@ -487,39 +487,79 @@ class BotExecutor(HumanMixin, Bot):
             self.log.debug(f"Mouse-over {texts} doesn't name {words}")
         return ok
 
-    def _use_tinderbox_on(self, tinder: MatchResult, log: MatchResult, careful: bool = False) -> bool:
-        """Left-click the tinderbox, then the log. Sometimes without reading the mouse-over
-        first (skip_hover_chance; never when `careful`). No double clicks here: a second click
-        would select the log. If a log is already selected (an earlier click selected it
-        instead), clicking the tinderbox lights it: then the log click is skipped."""
+    SELECTED_WHITE = 15  # white px in a slot: a selected item has a white outline (seen 39-67; else 0)
+
+    def _selected(self, slot: MatchResult, sc=None) -> bool:
+        """The item in this inventory slot is selected ("Use ... ->"): the game draws a white
+        outline around it. Checked on the screen, not via the (often cut) mouse-over OCR."""
+        import numpy as np
+        sc = sc or self.client.get_screenshot()
+        x1, y1, x2, y2 = slot.bounding_box
+        a = np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2)))
+        return int((a.min(axis=2) >= 240).sum()) >= self.SELECTED_WHITE
+
+    def _press_and_check(self, slot: MatchResult, quick: bool) -> bool:
+        """Click an inventory slot (quick, or after the mouse is on it) and return whether
+        the item is selected afterwards."""
         from core.input.mouse_control import press
-        quick = not careful and random.random() < self.cfg.skip_hover_chance.value
         if quick:
-            self.click_inv(tinder)
+            self.click_inv(slot)
         else:
-            self.move_inv(tinder)
-            time.sleep(random.uniform(0.06, 0.14))
-            if self._hover_has("use", "log"):  # "Use Logs -> Tinderbox": a log is selected
-                self.log.debug("A log was selected: using it on the tinderbox")
-                press()
-                return True
-            if not self._hover_has("tinderbox"):
-                self._tinder = None  # not there any more: look for it again
-                return False
             press()
+        time.sleep(random.uniform(0.05, 0.11))
+        return self._selected(slot)
+
+    def _use_tinderbox_on(self, tinder: MatchResult, log: MatchResult, careful: bool = False) -> bool:
+        """Tinderbox, then the log. Every step is checked on the screen: after the tinderbox
+        click it must have the white "selected" outline, otherwise it is clicked again.
+        Quick clicks (skip_hover_chance) skip the mouse-over read, normal ones read it
+        first; never when `careful`. No double clicks: a second click would undo the select."""
+        from core.input.mouse_control import press
+        sc = self.client.get_screenshot()
+        # leftover selection from an earlier try
+        if self._selected(tinder, sc):
+            self.log.debug("The tinderbox was still selected")
+        else:
+            sel_log = next((m for m in self._inv(self.cfg.log_type.name)
+                            if self._selected(self.inv_slot(m), sc)), None)
+            if sel_log is not None:
+                # a log is selected: clicking the tinderbox uses it on the log = lights it
+                self.log.debug("A log was selected: using it on the tinderbox")
+                self.click_inv(tinder)
+                return True
+            selected = False
+            for i in range(2):
+                quick = not careful and i == 0 and random.random() < self.cfg.skip_hover_chance.value
+                if not quick:
+                    self.move_inv(tinder)
+                    time.sleep(random.uniform(0.06, 0.14))
+                    if not self._hover_has("tinderbox"):
+                        if self._inv(self.cfg.tinderbox.name):
+                            self._tinder = None  # it moved: look for it again
+                        return False
+                if self._press_and_check(tinder, quick):
+                    selected = True
+                    break
+                self.log.info("The tinderbox click didn't select it: clicking it again")
+            if not selected:
+                return False
         time.sleep(self.cfg.fire_click_gap.choose())
         quick = not careful and random.random() < self.cfg.skip_hover_chance.value
         if quick:
             self.click_inv(log)
-            return True
-        self.move_inv(log)
-        time.sleep(random.uniform(0.06, 0.14))
-        if not self._hover_has("tinderbox", "log"):
-            # tinderbox not selected (the click missed) or still selected: put it down
-            if self._hover_has("tinderbox"):
-                self.click_inv(tinder)
-            return False
-        press()
+        else:
+            self.move_inv(log)
+            time.sleep(random.uniform(0.06, 0.14))
+            # "Use Tinderbox -> Logs": OCR often keeps only a part, any mention of logs will do
+            if not self._hover_has("log"):
+                self.click_inv(tinder)  # put the tinderbox down, try again
+                return False
+            press()
+        time.sleep(random.uniform(0.05, 0.11))
+        if self._selected(tinder):
+            # the log click didn't land: still selected - one more go at the log
+            self.log.info("The log click didn't land: clicking the log again")
+            self.click_inv(log)
         return True
 
     def _slot_empty(self, slot: MatchResult) -> bool:
