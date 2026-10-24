@@ -106,7 +106,8 @@ class BotConfig(BotConfigMixin):
     tinderbox: ItemParam = ItemParam("Tinderbox")
     fire_timeout: FloatParam = FloatParam(6.0)         # s for the log to leave the inventory (else: can't light here)
     fire_timeout_max: FloatParam = FloatParam(60.0)    # s kneeling until the fire catches (low level: long)
-    fire_step_px: FloatParam = FloatParam(2.0)         # minimap move that means the character stepped off the fire
+    fire_step_px: FloatParam = FloatParam(1.0)         # minimap move (px) = the character stepped off the fire
+    fire_step_diff: FloatParam = FloatParam(8.0)       # ...or this much change of the minimap picture
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 3)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
@@ -153,10 +154,6 @@ class BotConfig(BotConfigMixin):
     # inv_full_at: IntParam = IntParam(28)  # Default inventory capacity
     
     
-class WoodcutterShift:
-    last = None
-
-
 class BotExecutor(HumanMixin, Bot):
     name: str = "Woodcutter Bot"
     description: str = "A bot that chops trees and banks or drops logs when inventory is full"
@@ -514,15 +511,21 @@ class BotExecutor(HumanMixin, Bot):
         return np.asarray(sc.convert("L").crop(box), dtype=np.float32)
 
     @staticmethod
-    def _shift(a, b) -> float:
+    def _shift(a, b) -> tuple[float, float]:
+        """(px the minimap moved, mean pixel difference). Measured while lighting: kneeling
+        0.0 px / diff < 1; the step off the fire 1.2-1.6 px / diff ~30."""
         import cv2
         import numpy as np
         if a is None or b is None or a.shape != b.shape:
-            return 0.0
+            return 0.0, 0.0
         win = cv2.createHanningWindow(a.shape[::-1], cv2.CV_32F)
         (dx, dy), resp = cv2.phaseCorrelate(a, b, win)
-        WoodcutterShift.last = (round(dx, 1), round(dy, 1), round(resp, 2), float(np.abs(a - b).mean()))
-        return float(np.hypot(dx, dy)) if resp > 0.05 else 0.0
+        px = float(np.hypot(dx, dy)) if resp > 0.05 else 0.0
+        return px, float(np.abs(a - b).mean())
+
+    def _stepped(self, ref) -> bool:
+        px, diff = self._shift(ref, self._minimap_gray())
+        return px >= self.cfg.fire_step_px.value or diff >= self.cfg.fire_step_diff.value
 
     def _wait_lit(self, slot: MatchResult) -> str:
         """After the log click. The game puts the log on the ground at once - its slot is
@@ -550,15 +553,13 @@ class BotExecutor(HumanMixin, Bot):
                     ref = self._minimap_gray()
                     self.log.debug(f"Lighting started ({time.time() - t0:.1f}s after the click)")
                 continue
-            moved = self._shift(ref, self._minimap_gray())
-            self.log.debug(f"Minimap shift dx,dy,resp,diff = {WoodcutterShift.last} (box {ref.shape})")
-            if moved >= self.cfg.fire_step_px.value:
-                self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (stepped: minimap moved {moved:.1f}px)")
+            px, diff = self._shift(ref, self._minimap_gray())
+            if px >= self.cfg.fire_step_px.value or diff >= self.cfg.fire_step_diff.value:
+                self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (stepped off: minimap {px:.1f}px, diff {diff:.0f})")
                 return "lit"
             if not tabbed and elapsed >= random.uniform(1.0, 2.0):
                 tabbed = True
-                if self.maybe_alt_tab(lambda: self._shift(ref, self._minimap_gray()) < self.cfg.fire_step_px.value,
-                                      "fire lighting"):
+                if self.maybe_alt_tab(lambda: not self._stepped(ref), "fire lighting"):
                     continue
         if not started:
             return "blocked"  # the log stayed in the inventory: no fire possible on this tile
