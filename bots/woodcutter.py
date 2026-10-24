@@ -497,7 +497,7 @@ class BotExecutor(HumanMixin, Bot):
         used = inventory.used_slots(self.client.get_screenshot())
         return not any(abs(r.start_x - slot.start_x) < 4 and abs(r.start_y - slot.start_y) < 4 for r in used)
 
-    def _chat_tail(self, n: int = 2) -> list[str]:
+    def _chat_tail(self, n: int = 3) -> list[str]:
         """The newest chat lines (bottom of the chat box), without the typing line."""
         try:
             text = self.client.get_chat_text()
@@ -506,7 +506,10 @@ class BotExecutor(HumanMixin, Bot):
         except Exception:
             return []
         lines = [l.strip().lower() for l in text.splitlines() if l.strip()]
-        lines = [l for l in lines if not l.endswith("*")]  # "Name: *" = the typing line
+        name = (getattr(self.client, "username", "") or "").lower()
+        # the typing line "Name: *" (the * is often not read)
+        lines = [l for l in lines if not l.endswith("*") and not (l.endswith(":") and len(l) < 20)
+                 and not (name and l.startswith(name))]
         return lines[-n:]
 
     @staticmethod
@@ -521,39 +524,58 @@ class BotExecutor(HumanMixin, Bot):
             return "trying"
         return None
 
+    def _newest_fire_msg(self) -> tuple[str | None, list[str]]:
+        tail = self._chat_tail()
+        for line in reversed(tail):
+            m = self._fire_msg(line)
+            if m:
+                return m, tail
+        return None, tail
+
     def _wait_lit(self, slot: MatchResult) -> str:
-        """After the log click: 'lit' (its slot is empty twice in a row), 'blocked' (chat:
-        can't light a fire here) or 'failed' (no sign of lighting). While the chat says it
-        is still trying, wait up to fire_timeout_max (low levels take many tries)."""
+        """After the log click. The game puts the log on the ground at once ("You attempt to
+        light the logs.") - its slot is empty long before the fire burns - and the fire is
+        only lit at "The fire catches and the logs begin to burn." Clicking anything before
+        that stops the lighting. Returns 'lit', 'blocked' ("You can't light a fire here.")
+        or 'failed' (no attempt started, or it never caught)."""
         from core.camera import GAME_VIEW
-        # the mouse off the inventory: the cursor over the log hid it (looked "lit")
+        # the mouse off the inventory (natural, and the cursor hid the log)
         x1, y1, x2, y2 = GAME_VIEW
         self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))
         t0 = time.time()
-        short = t0 + float(self.cfg.fire_timeout.value)
-        hard = t0 + float(self.cfg.fire_timeout_max.value)
-        trying, empties, tabbed = False, 0, False
-        next_chat = t0 + random.uniform(0.9, 1.4)
-        while not self.terminate and time.time() < (hard if trying else short):
-            time.sleep(random.uniform(0.45, 0.7))
-            if self._slot_empty(slot):
-                empties += 1
-                if empties >= 2:
-                    return "lit"
-                continue
-            empties = 0
-            if time.time() >= next_chat:
-                msgs = [self._fire_msg(l) for l in self._chat_tail()]
-                if "blocked" in msgs and "lit" not in msgs:
+        started = False
+        seen_trying = False
+        tabbed = False
+        while not self.terminate:
+            elapsed = time.time() - t0
+            limit = self.cfg.fire_timeout_max.value if started else self.cfg.fire_timeout.value
+            if elapsed > limit:
+                break
+            time.sleep(random.uniform(0.5, 0.8))
+            msg, tail = self._newest_fire_msg()
+            if not started:
+                # the attempt began: chat says so, or the log left its slot (put on the ground)
+                if msg == "trying" or self._slot_empty(slot):
+                    started = True
+                    seen_trying = msg == "trying"
+                    self.log.debug(f"Lighting started ({time.time() - t0:.1f}s); chat {tail}")
+                elif tail and self._fire_msg(tail[-1]) == "blocked":  # the newest line, not an old one
                     return "blocked"
-                if ("trying" in msgs or "lit" in msgs) and not trying:
-                    trying = True
-                    self.log.debug(f"Still lighting (chat: {self._chat_tail()})")
-                next_chat = time.time() + random.uniform(1.5, 2.5)
-            if not tabbed and time.time() - t0 >= random.uniform(1.0, 2.0):
+                continue
+            if msg == "trying":
+                seen_trying = True
+            if msg == "lit":
+                # not the previous fire's line: an attempt line was seen first, or sits above it
+                msgs = [self._fire_msg(l) for l in tail]
+                if seen_trying or ("trying" in msgs and msgs.index("trying") < len(msgs) - 1 - msgs[::-1].index("lit")):
+                    self.log.debug(f"Chat {tail}")
+                    return "lit"
+            if tail and self._fire_msg(tail[-1]) == "blocked":
+                return "blocked"
+            if not tabbed and elapsed >= random.uniform(1.0, 2.0):
                 tabbed = True
-                if self.maybe_alt_tab(lambda: not self._slot_empty(slot), "fire lighting"):
-                    short = max(short, time.time() + 3)
+                self.maybe_alt_tab(lambda: self._newest_fire_msg()[0] == "trying", "fire lighting")
+        self.log.debug(f"No fire after {time.time() - t0:.0f}s (started: {started}); chat {self._chat_tail()}")
         return "failed"
 
     def burn_logs(self) -> int:
@@ -595,9 +617,10 @@ class BotExecutor(HumanMixin, Bot):
                     self.log.debug(f"Lit after {time.time() - t_fire:.1f}s")
                     break
                 if res == "failed":
-                    # no sign of lighting at all (the click didn't take): just try again
-                    self.log.info("No fire and no 'attempt' in the chat: using the tinderbox again")
-                    logs = self._inv(name) or logs
+                    logs = self._inv(name)
+                    if not logs:
+                        break  # the log lies on the ground unlit; nothing left to light
+                    self.log.info("No fire: using the tinderbox again")
                     continue
                 # blocked: a fire is already here / the tile doesn't allow one
                 if moves >= int(self.cfg.fire_moves.value):
