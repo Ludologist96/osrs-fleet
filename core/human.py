@@ -232,15 +232,22 @@ class HumanMixin:
 
     MINIMAP_PX_PER_TILE = 4.5  # default minimap zoom (seen: 5-14 px = 1-3 tiles)
 
-    def minimap_step(self, tiles: float) -> None:
+    def minimap_step(self, tiles: float, toward: tuple[float, float] | None = None,
+                     spread: float = 50.0, label: str = "Walk-away") -> tuple[int, int]:
+        """Click the minimap `tiles` away from the player. `toward` = a minimap point: go
+        roughly that way (+-`spread` degrees) instead of a random direction."""
         mm = self.client.minimap.map
         cx, cy = mm.get_center()
         r = min(mm.width, mm.height) / 2 - 8
         dist = min(r, tiles * self.MINIMAP_PX_PER_TILE)
-        ang = random.uniform(0, 2 * math.pi)
+        if toward is not None and (toward[0] - cx or toward[1] - cy):
+            ang = math.atan2(toward[1] - cy, toward[0] - cx) + math.radians(random.uniform(-spread, spread))
+        else:
+            ang = random.uniform(0, 2 * math.pi)
         pt = (int(cx + dist * math.cos(ang)), int(cy + dist * math.sin(ang)))
         self.client.click(pt)
-        self.log.info(f"Walk-away: {tiles:.0f} tiles via the minimap (clicked {pt})")
+        self.log.info(f"{label}: {tiles:.0f} tiles via the minimap (clicked {pt})")
+        return pt
 
     # ------------------------------------------------------------ misclick
     def maybe_misclick(self, point: tuple[int, int], avoid=None) -> bool:

@@ -109,6 +109,7 @@ class BotConfig(BotConfigMixin):
     fire_step_px: FloatParam = FloatParam(1.0)         # minimap move (px) = the character stepped off the fire
     fire_step_diff: FloatParam = FloatParam(8.0)       # ...or this much change of the minimap picture
     home_match: FloatParam = FloatParam(0.45)          # minimap match needed to walk back to the trees
+    home_max_tiles: FloatParam = FloatParam(5.0)       # firemaking: farther than this from the trees -> walk back
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 3)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
@@ -195,6 +196,13 @@ class BotExecutor(HumanMixin, Bot):
                       f"({'drop' if self.cfg.drop_items.value else 'bank'} mode)")
         self.human_init()
         self.set_activity("working")
+        if self.cfg.burn_logs.value:
+            # the run starts at the trees: remember them now (a restart mid-run too)
+            try:
+                self._remember_home()
+                self.log.info("Firemaking: remembered the minimap around the trees")
+            except Exception:
+                self.log.warning("Couldn't remember the tree area yet", exc_info=True)
         
         while not self.terminate:
             try:
@@ -220,7 +228,8 @@ class BotExecutor(HumanMixin, Bot):
                 if not self.client.is_woodcutting:
                     # firemaking: the tree fell - light the logs first
                     if self.cfg.burn_logs.value:
-                        self.burn_logs()
+                        if self.burn_logs():
+                            self.go_home(max_tiles=self.cfg.home_max_tiles.value)
                     try:
                         self.log.info("Not woodcutting. Clicking tree...")
                         self.set_activity("working")
@@ -245,7 +254,7 @@ class BotExecutor(HumanMixin, Bot):
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
                             # firemaking drifts away from the trees (one tile per fire): go back
-                            if self.cfg.burn_logs.value and self.tree_waits >= 2 and self.go_home():
+                            if self.cfg.burn_logs.value and self.tree_waits >= 1 and self.go_home():
                                 continue
                             # all stumps: a good moment to wander a few steps
                             if self.tree_waits >= 2 and self.maybe_walk_away(prefer=True):
@@ -541,26 +550,40 @@ class BotExecutor(HumanMixin, Bot):
         if patch.shape == (2 * h, 2 * h):
             self._home = patch.copy()
 
-    def go_home(self) -> bool:
-        """No marked tree in sight: find the remembered patch on the minimap and walk there
-        (the camera doesn't turn in firemaking mode, so the minimap orientation is the same)."""
+    def _find_home(self):
+        """Where the remembered tree area is on the minimap now: ((x, y), px from the
+        player) in screen coords, or None if unknown / not found."""
         import cv2
         if self._home is None:
-            return False
+            return None
         img, (x1, y1), (cx, cy) = self._minimap_full()
         res = cv2.matchTemplate(img, self._home, cv2.TM_CCOEFF_NORMED)
         _, score, _, (mx, my) = cv2.minMaxLoc(res)
         hx, hy = x1 + mx + self.HOME_PATCH, y1 + my + self.HOME_PATCH
         dist = ((hx - cx) ** 2 + (hy - cy) ** 2) ** 0.5
-        self.log.info(f"Back to the trees: minimap match {score:.2f}, {dist:.0f}px from here")
-        if score < self.cfg.home_match.value or dist < 4:
+        if score < self.cfg.home_match.value:
+            self.log.debug(f"Tree area not found on the minimap (match {score:.2f})")
+            return None
+        return (hx, hy), dist
+
+    def go_home(self, max_tiles: float = 1.0) -> bool:
+        """Walk back to the remembered tree area if it is more than `max_tiles` away
+        (the camera doesn't turn in firemaking mode, so the minimap orientation is the same)."""
+        found = self._find_home()
+        if not found:
             return False
-        r = min(self.client.minimap.map.width, self.client.minimap.map.height) / 2 - 10
+        (hx, hy), dist = found
+        if dist < max(4.0, max_tiles * self.MINIMAP_PX_PER_TILE):
+            return False
+        self.log.info(f"Back to the trees: {dist / self.MINIMAP_PX_PER_TILE:.0f} tiles away")
+        mm = self.client.minimap.map
+        cx, cy = mm.get_center()
+        r = min(mm.width, mm.height) / 2 - 10
         if dist > r:  # click the edge of the minimap in that direction, then look again
             hx, hy = cx + (hx - cx) * r / dist, cy + (hy - cy) * r / dist
         self.set_activity("walking")
         self.client.click((int(hx + random.uniform(-2, 2)), int(hy + random.uniform(-2, 2))))
-        self.sleep_checked(1.0 + dist / 4 * 0.6 * random.uniform(0.8, 1.1))  # ~0.6 s a tile
+        self.sleep_checked(1.0 + min(dist, r) / 4 * 0.6 * random.uniform(0.8, 1.1))  # ~0.6 s a tile
         self.set_activity("working")
         self.tree_waits = 0
         return True
@@ -673,7 +696,9 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.info(f"Can't light a fire here: moving {tiles:.0f} tile(s) "
                               f"({moves}/{int(self.cfg.fire_moves.value)})")
                 self.set_activity("walking")
-                self.minimap_step(tiles)
+                found = self._find_home()
+                self.minimap_step(tiles, toward=found[0] if found else None,
+                                  label="Moving for a free fire spot")
                 time.sleep(random.uniform(0.8, 1.4) + tiles * 0.5)
                 self.set_activity("firemaking")
                 logs = self._inv(name) or logs
