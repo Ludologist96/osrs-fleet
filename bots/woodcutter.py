@@ -104,8 +104,9 @@ class BotConfig(BotConfigMixin):
     # already there, a blocked tile) it walks a few tiles and tries again.
     burn_logs: BooleanParam = BooleanParam(False)
     tinderbox: ItemParam = ItemParam("Tinderbox")
-    fire_timeout: FloatParam = FloatParam(12.0)        # s without any sign of lighting -> click again
-    fire_timeout_max: FloatParam = FloatParam(60.0)    # s while the chat says it's still trying (low level)
+    fire_timeout: FloatParam = FloatParam(6.0)         # s for the log to leave the inventory (else: can't light here)
+    fire_timeout_max: FloatParam = FloatParam(60.0)    # s kneeling until the fire catches (low level: long)
+    fire_step_px: FloatParam = FloatParam(2.0)         # minimap move that means the character stepped off the fire
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 3)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
@@ -497,85 +498,65 @@ class BotExecutor(HumanMixin, Bot):
         used = inventory.used_slots(self.client.get_screenshot())
         return not any(abs(r.start_x - slot.start_x) < 4 and abs(r.start_y - slot.start_y) < 4 for r in used)
 
-    def _chat_tail(self, n: int = 3) -> list[str]:
-        """The newest chat lines (bottom of the chat box), without the typing line."""
-        try:
-            text = self.client.get_chat_text()
-        except ScriptTerminationException:
-            raise
-        except Exception:
-            return []
-        lines = [l.strip().lower() for l in text.splitlines() if l.strip()]
-        name = (getattr(self.client, "username", "") or "").lower()
-        # the typing line "Name: *" (the * is often not read)
-        lines = [l for l in lines if not l.endswith("*") and not (l.endswith(":") and len(l) < 20)
-                 and not (name and l.startswith(name))]
-        return lines[-n:]
+    def _minimap_gray(self):
+        """The minimap as a grey float image (for measuring how far the view moved)."""
+        import numpy as np
+        sc = self.client.get_screenshot()
+        mm = self.client.minimap.map
+        x1, y1, x2, y2 = mm.bounding_box
+        # the middle of the minimap: no compass/orbs at the edges
+        w, h = x2 - x1, y2 - y1
+        box = (x1 + w // 5, y1 + h // 5, x2 - w // 5, y2 - h // 5)
+        return np.asarray(sc.convert("L").crop(box), dtype=np.float32)
 
     @staticmethod
-    def _fire_msg(line: str) -> str | None:
-        """'blocked' / 'trying' / 'lit' from one chat line (OCR-tolerant)."""
-        l = line.replace("'", "").replace("`", "")
-        if "fire here" in l or "cant light" in l or "can t light" in l:
-            return "blocked"
-        if "catches" in l or "begin to burn" in l or "logs begin" in l:
-            return "lit"
-        if "attempt" in l and "light" in l:
-            return "trying"
-        return None
-
-    def _newest_fire_msg(self) -> tuple[str | None, list[str]]:
-        tail = self._chat_tail()
-        for line in reversed(tail):
-            m = self._fire_msg(line)
-            if m:
-                return m, tail
-        return None, tail
+    def _shift(a, b) -> float:
+        import cv2
+        import numpy as np
+        if a is None or b is None or a.shape != b.shape:
+            return 0.0
+        win = cv2.createHanningWindow(a.shape[::-1], cv2.CV_32F)
+        (dx, dy), resp = cv2.phaseCorrelate(a, b, win)
+        return float(np.hypot(dx, dy)) if resp > 0.05 else 0.0
 
     def _wait_lit(self, slot: MatchResult) -> str:
-        """After the log click. The game puts the log on the ground at once ("You attempt to
-        light the logs.") - its slot is empty long before the fire burns - and the fire is
-        only lit at "The fire catches and the logs begin to burn." Clicking anything before
-        that stops the lighting. Returns 'lit', 'blocked' ("You can't light a fire here.")
-        or 'failed' (no attempt started, or it never caught)."""
+        """After the log click. The game puts the log on the ground at once - its slot is
+        empty long before the fire burns - and the character kneels until the fire catches,
+        then steps off it (one tile). Clicking anything before that stops the lighting.
+        So: started = the log left its slot; lit = then the minimap moved (the step).
+        Returns 'lit', 'blocked' (the log never left: a fire is already here) or 'failed'."""
         from core.camera import GAME_VIEW
         # the mouse off the inventory (natural, and the cursor hid the log)
         x1, y1, x2, y2 = GAME_VIEW
         self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))
         t0 = time.time()
         started = False
-        seen_trying = False
+        ref = None
         tabbed = False
         while not self.terminate:
             elapsed = time.time() - t0
             limit = self.cfg.fire_timeout_max.value if started else self.cfg.fire_timeout.value
             if elapsed > limit:
                 break
-            time.sleep(random.uniform(0.5, 0.8))
-            msg, tail = self._newest_fire_msg()
+            time.sleep(random.uniform(0.45, 0.7))
             if not started:
-                # the attempt began: chat says so, or the log left its slot (put on the ground)
-                if msg == "trying" or self._slot_empty(slot):
+                if self._slot_empty(slot):
                     started = True
-                    seen_trying = msg == "trying"
-                    self.log.debug(f"Lighting started ({time.time() - t0:.1f}s); chat {tail}")
-                elif tail and self._fire_msg(tail[-1]) == "blocked":  # the newest line, not an old one
-                    return "blocked"
+                    ref = self._minimap_gray()
+                    self.log.debug(f"Lighting started ({time.time() - t0:.1f}s after the click)")
                 continue
-            if msg == "trying":
-                seen_trying = True
-            if msg == "lit":
-                # not the previous fire's line: an attempt line was seen first, or sits above it
-                msgs = [self._fire_msg(l) for l in tail]
-                if seen_trying or ("trying" in msgs and msgs.index("trying") < len(msgs) - 1 - msgs[::-1].index("lit")):
-                    self.log.debug(f"Chat {tail}")
-                    return "lit"
-            if tail and self._fire_msg(tail[-1]) == "blocked":
-                return "blocked"
+            moved = self._shift(ref, self._minimap_gray())
+            if moved >= self.cfg.fire_step_px.value:
+                self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (stepped: minimap moved {moved:.1f}px)")
+                return "lit"
             if not tabbed and elapsed >= random.uniform(1.0, 2.0):
                 tabbed = True
-                self.maybe_alt_tab(lambda: self._newest_fire_msg()[0] == "trying", "fire lighting")
-        self.log.debug(f"No fire after {time.time() - t0:.0f}s (started: {started}); chat {self._chat_tail()}")
+                if self.maybe_alt_tab(lambda: self._shift(ref, self._minimap_gray()) < self.cfg.fire_step_px.value,
+                                      "fire lighting"):
+                    continue
+        if not started:
+            return "blocked"  # the log stayed in the inventory: no fire possible on this tile
+        self.log.debug(f"No fire after {time.time() - t0:.0f}s")
         return "failed"
 
     def burn_logs(self) -> int:
