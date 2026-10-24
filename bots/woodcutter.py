@@ -456,7 +456,8 @@ class BotExecutor(HumanMixin, Bot):
         def has(t, w):
             if w in t:
                 return True
-            return any(SequenceMatcher(None, tok, w).ratio() >= 0.75 for tok in t.replace(">", " ").split())
+            # OCR misreads letters ("Tinderbox" -> "timdarbax", "Logs" -> "lags")
+            return any(SequenceMatcher(None, tok, w).ratio() >= 0.55 for tok in t.replace(">", " ").split())
         ok = any(all(has(t, w.lower()) for w in words) for t in texts)
         if not ok:
             self.log.debug(f"Mouse-over {texts} doesn't name {words}")
