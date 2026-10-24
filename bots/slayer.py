@@ -95,6 +95,10 @@ class BotConfig(BotConfigMixin):
     loot: BooleanParam = BooleanParam(True)
     loot_use: StringListParam = StringListParam(["Bones"])     # pick up and use at once (bury / eat)
     loot_keep: StringListParam = StringListParam([])  # pick up and keep (e.g. "Cowhide" once banking exists)
+    # Both lists empty = loot nothing. Anything else that ends up in the inventory while
+    # looting (a quick click takes the top item of a pile) is dropped again, and these are
+    # always dropped when seen (also at the start) - unless listed in loot_use / loot_keep.
+    junk_items: StringListParam = StringListParam(["Cowhide", "Raw beef"])
     loot_color: RGBParam = RGBParam(170, 0, 255)  # Ground Items highlight colour (purple)
     # After a kill the drop appears when the death animation ends: watch for it from
     # loot_wait's low end, give up at its high end; react loot_react after it shows.
@@ -219,6 +223,7 @@ class BotExecutor(HumanMixin, Bot):
         self.human_init()
         self.set_activity("looking for a target")
         try:
+            self.drop_junk()  # e.g. cowhides left from earlier runs
             while not self.terminate:
                 try:
                     if self._step() == "stop":
@@ -532,8 +537,9 @@ class BotExecutor(HumanMixin, Bot):
         self._progress_t = time.time()
         t0 = time.time()
         fight_s = t0 - getattr(self, "_t_fight_start", start)
-        if self.cfg.loot.value:
+        if self.cfg.loot.value and (self.cfg.loot_use.value or self.cfg.loot_keep.value):
             self.set_activity("looting")
+            snap = self._used_slots()
             if saw_death:
                 # what's purple on screen as the monster dies: the drop will be what's new
                 before = self._loot_mask()
@@ -544,6 +550,7 @@ class BotExecutor(HumanMixin, Bot):
             self.pick_up_loot(before)
             t2 = time.time()
             self.use_items()
+            self.drop_junk(snap)
             t3 = time.time()
             self.log.info(f"Timing: fight {fight_s:.1f}s, drop wait {t1 - t0:.1f}s, "
                           f"pick-up {t2 - t1:.1f}s, use {t3 - t2:.1f}s")
@@ -745,6 +752,60 @@ class BotExecutor(HumanMixin, Bot):
         if out:
             self.log.debug(f"No loot outline visible; aiming under {len(out)} item label(s)")
         return out
+
+    def _used_slots(self) -> list[MatchResult]:
+        from core import inventory
+        try:
+            self._open_inventory()
+            return inventory.used_slots(self.client.get_screenshot())
+        except ScriptTerminationException:
+            raise
+        except Exception:
+            self.log.debug("Couldn't read the inventory slots", exc_info=True)
+            return []
+
+    def drop_junk(self, before: list[MatchResult] | None = None) -> int:
+        """Shift-drop what we don't want: inventory slots that got filled since `before`
+        (looting) and every `junk_items` item, except loot_use / loot_keep items."""
+        wanted = list(self.cfg.loot_use.value) + list(self.cfg.loot_keep.value)
+        low = {w.lower() for w in wanted}
+        junk = [j for j in self.cfg.junk_items.value if j.lower() not in low]
+        now = self._used_slots()
+        cand = []
+        if before is not None:
+            cand = [r for r in now if not any(b.contains(*r.get_center()) for b in before)]
+        if junk:
+            try:
+                for m in self.client.get_inv_items(junk, min_confidence=0.85, verify_tab=False):
+                    cx, cy = m.get_center()
+                    slot = next((r for r in now if r.contains(cx, cy)), None)
+                    if slot is not None and slot not in cand:
+                        cand.append(slot)
+            except Exception:
+                self.log.debug("Junk check failed", exc_info=True)
+        if cand and wanted:
+            try:
+                keep = [m.get_center() for m in self.client.get_inv_items(wanted, min_confidence=0.85,
+                                                                          verify_tab=False)]
+            except Exception:
+                keep = []
+            cand = [r for r in cand if not any(r.contains(*p) for p in keep)]
+        if not cand:
+            return 0
+        prev = getattr(self, "activity", "")
+        self.set_activity("dropping")
+        self.log.info(f"Dropping {len(cand)} unwanted item(s)")
+        from core.input import keys as keyboard
+        try:
+            keyboard.press("shift")
+            for r in sorted(cand, key=lambda r: (r.start_y, r.start_x)):
+                self.client.click(r.scale_px(-6))
+                time.sleep(random.uniform(0.15, 0.3))
+        finally:
+            keyboard.release("shift")
+        self.count("dropped", len(cand))
+        self.set_activity(prev or "looking for a target")
+        return len(cand)
 
     def _wanted_loot(self) -> list[str]:
         """Item names worth picking up now (keep-items only while there's room for them)."""
