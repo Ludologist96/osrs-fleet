@@ -201,6 +201,8 @@ class BotExecutor(HumanMixin, Bot):
                       f"({'drop' if self.cfg.drop_items.value else 'bank'} mode)")
         self.human_init()
         self.set_activity("working")
+        if not self.cfg.drop_items.value:
+            self._close_bank()  # left open (a restart in the middle of a bank trip)
         # the run starts at the trees: remember where (World Location tile; minimap fallback)
         try:
             self.remember_home()
@@ -260,6 +262,8 @@ class BotExecutor(HumanMixin, Bot):
                     except Exception as e:
                         if self.terminate:
                             break
+                        if not self.cfg.drop_items.value:
+                            self._close_bank()
                         if True:  # drop and bank mode alike (bank mode used to walk the old route here)
                             # Marked trees are stumps (their marker disappears): wait for respawn.
                             self.tree_waits += 1
@@ -533,12 +537,34 @@ class BotExecutor(HumanMixin, Bot):
             self.count("banked", max(0, n_logs - left))
         self.log.info(f"Banked {max(0, n_logs - left)} logs")
         self._last_used = None
-        try:
-            if random.random() < 0.5:
-                self.bank.close()
-        except Exception:
-            self.log.debug("bank close failed", exc_info=True)
+        self._close_bank()
         return left == 0
+
+    def _close_bank(self) -> None:
+        """Close the bank window if it is open (it covers the tile panel and the trees:
+        a bot left with an open bank - e.g. restarted mid-trip - saw nothing at all).
+        The X button; else Escape; else a short minimap click (any walk closes it)."""
+        bank = getattr(self, "bank", None)
+        if bank is None:
+            return
+        for step in ("x", "esc", "walk"):
+            try:
+                if not bank.is_open:
+                    return
+                if step == "x":
+                    from core.bank import BANK_CLOSE
+                    btn = self.client.find_in_window(BANK_CLOSE, min_scale=1, max_scale=1)
+                    if btn.confidence > 0.85:
+                        self.client.click(btn)
+                elif step == "esc":
+                    keyboard.press_and_release("esc")
+                else:
+                    self.minimap_step(1, label="Closing the bank")
+                time.sleep(random.uniform(0.6, 1.0))
+            except Exception:
+                self.log.debug(f"bank close ({step}) failed", exc_info=True)
+        if bank.is_open:
+            self.log.warning("The bank window stays open")
 
     # ------------------------------------------------------------------ chopping
     def _color_order(self) -> list:
