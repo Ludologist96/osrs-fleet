@@ -299,7 +299,26 @@ class HumanMixin:
         return cv2.medianBlur(g, 5).astype(np.float32), (x1, y1), (cx, cy)
 
     def remember_home(self) -> bool:
-        """The character stands in its work area: remember the minimap around it."""
+        """The character stands in its work area: remember where. Best: its world tile
+        (World Location plugin panel, exact). Also the minimap around it (the fallback when
+        the panel can't be read). A fixed `home_tile` ("x,y") in the bot's config wins."""
+        fixed = str(_v(self.cfg, "home_tile", "") or "").replace(" ", "")
+        tile = None
+        if fixed:
+            try:
+                fx, fy = (int(v) for v in fixed.split(",")[:2])
+                tile = (fx, fy, 0)
+            except ValueError:
+                self.log.warning(f"home_tile '{fixed}' is not 'x,y': ignored")
+        if tile is None:
+            tile = self.my_tile()
+        self._home_tile = tile
+        if tile:
+            self.log.info(f"Start area: tile {tile[0]}, {tile[1]}"
+                          + (" (from the home_tile setting)" if fixed else ""))
+        else:
+            self.log.warning("Start area: World Location panel not readable - walking back "
+                             "uses the minimap picture instead (less reliable)")
         img, (x1, y1), (cx, cy) = self._minimap_full()
         r = self.HOME_R
         px, py = int(round(cx - x1)), int(round(cy - y1))
@@ -345,6 +364,26 @@ class HumanMixin:
     def go_home(self, max_tiles: float = 1.0, rotations: bool = True, label: str = "the start area") -> bool:
         """Walk back toward the remembered area if it is more than `max_tiles` away.
         Too far for one minimap click: click the minimap edge that way (look again later)."""
+        home = getattr(self, "_home_tile", None)
+        if home:
+            cur = self.my_tile()
+            if cur:
+                dist = math.hypot(home[0] - cur[0], home[1] - cur[1])
+                if dist <= max(1.0, max_tiles):
+                    return False
+                self.log.info(f"Back to {label}: {dist:.0f} tiles away "
+                              f"(at {cur[0]}, {cur[1]} -> {home[0]}, {home[1]})")
+                prev = self.activity
+                self.set_activity("walking")
+                try:
+                    ok = self.walk_to_tile(home, tol=random.uniform(0.8, 2.2), label=label)
+                finally:
+                    self.set_activity(prev if prev not in (None, "walking") else "working")
+                if not ok:
+                    self.log.warning(f"Couldn't get back to {label} (still "
+                                     f"{self._tile_dist(home):.0f} tiles away)")
+                return True
+            self.log.debug("Tile not readable: walking back by the minimap picture")
         found = self.find_home(rotations)
         if not found:
             return False
@@ -363,6 +402,112 @@ class HumanMixin:
         self.sleep_checked(1.0 + min(dist, rad) / self.MINIMAP_PX_PER_TILE * 0.6 * random.uniform(0.8, 1.1))
         self.set_activity("working")
         return True
+
+    # ------------------------------------------------------------ world tile + walking
+    # The World Location plugin's Grid Info panel gives the exact tile (core/position.py).
+    # Walking: click the minimap toward the target. The minimap turns with the camera, so
+    # the bot learns that turn from where a click really took it (closed loop: every click
+    # starts from a fresh tile reading, so a wrong guess is corrected on the next click).
+    def my_tile(self, sc=None):
+        """(x, y, plane) or None."""
+        from core.position import read_tile
+        try:
+            t = read_tile(sc or self.client.get_screenshot())
+        except Exception:
+            self.log.debug("tile read failed", exc_info=True)
+            t = None
+        if t is None:
+            self._tile_misses = getattr(self, "_tile_misses", 0) + 1
+            if self._tile_misses in (3, 50):
+                self.log.warning("Can't read the tile from the World Location panel "
+                                 "(plugin off, or something covers the top-left corner?)")
+        else:
+            self._tile_misses = 0
+        return t
+
+    def _tile_dist(self, target) -> float:
+        cur = self.my_tile()
+        return math.hypot(target[0] - cur[0], target[1] - cur[1]) if cur else float("nan")
+
+    def _wait_stopped(self, start, timeout: float):
+        """Poll the tile until the character stands still; returns the last tile."""
+        last, same, moved, t0 = start, 0, False, time.time()
+        while time.time() - t0 < timeout:
+            self.sleep_checked(random.uniform(0.5, 0.7))  # ~1 game tick
+            t = self.my_tile()
+            if t is None:
+                continue
+            if t != last:
+                moved, same, last = True, 0, t
+            else:
+                same += 1
+                if (moved and same >= 2) or same >= 4:
+                    break
+        return last
+
+    @staticmethod
+    def _wrap(a: float) -> float:
+        return (a + math.pi) % (2 * math.pi) - math.pi
+
+    def walk_to_tile(self, target, tol: float = 1.5, label: str = "the target",
+                     max_clicks: int = 14) -> bool:
+        """Walk to a world tile with minimap clicks. True when within `tol` tiles."""
+        yaw = getattr(self, "_mm_yaw", None)          # minimap turn (radians), learnt
+        turns = getattr(getattr(self, "camera", None), "turns", 0)
+        sure = yaw is not None and getattr(self, "_mm_turns", None) == turns
+        ppt = getattr(self, "_mm_ppt", self.MINIMAP_PX_PER_TILE)
+        stuck = 0
+        mm = self.client.minimap.map
+        rad_px = min(mm.width, mm.height) / 2 - 14
+        for i in range(max_clicks):
+            if self.terminate:
+                return False
+            cur = self.my_tile()
+            if cur is None:
+                return False
+            dx, dy = target[0] - cur[0], target[1] - cur[1]
+            dist = math.hypot(dx, dy)
+            if dist <= tol:
+                if i:
+                    self.log.info(f"Back at {label} ({cur[0]}, {cur[1]}) after {i} click(s)")
+                return True
+            a_world = math.atan2(-dy, dx)  # north-up minimap angle (screen y grows down)
+            ang = a_world + (yaw or 0.0)
+            far = rad_px / ppt
+            step = min(dist, far if sure else 6.0)
+            if stuck:
+                # blocked (fence, wall, tree): try around it
+                ang += math.radians(random.choice((-1, 1)) * random.uniform(35, 75))
+                step = min(step, random.uniform(4, 7))
+            step = max(1.0, step + random.uniform(-0.4, 0.4))
+            cx, cy = self.player_dot()
+            pt = (int(round(cx + step * ppt * math.cos(ang) + random.uniform(-1, 1))),
+                  int(round(cy + step * ppt * math.sin(ang) + random.uniform(-1, 1))))
+            self.client.click(pt)
+            end = self._wait_stopped(cur, timeout=3.0 + step * 0.7)
+            mx, my = end[0] - cur[0], end[1] - cur[1]
+            moved = math.hypot(mx, my)
+            self.log.debug(f"Walk: {cur[:2]} -> {end[:2]} (clicked {step:.1f} tiles at "
+                           f"{math.degrees(ang):.0f} deg, turn guess "
+                           f"{'?' if yaw is None else round(math.degrees(yaw))})")
+            if moved < 1.0:
+                stuck += 1
+                if stuck >= 4:
+                    return False
+                continue
+            stuck = 0
+            if moved >= 2.5:
+                est = self._wrap(ang - math.atan2(-my, mx))
+                if not sure:
+                    yaw, sure = est, True
+                else:
+                    err = self._wrap(est - yaw)
+                    yaw = self._wrap(yaw + 0.6 * err)
+                    if abs(math.degrees(err)) < 25 and moved < dist - 0.5:
+                        # stopped short of the target where we clicked: scale check
+                        ppt = min(8.0, max(2.5, ppt + 0.3 * (ppt * step / moved - ppt)))
+                self._mm_yaw, self._mm_ppt, self._mm_turns = yaw, ppt, turns
+        return self._tile_dist(target) <= tol
 
     # ------------------------------------------------------------ one step aside
     PLAYER_PT = (260, 168)  # window coords: the character stands in the middle of the game view

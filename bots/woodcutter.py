@@ -109,7 +109,8 @@ class BotConfig(BotConfigMixin):
     fire_step_px: FloatParam = FloatParam(1.0)         # minimap move (px) = the character stepped off the fire
     fire_step_diff: FloatParam = FloatParam(8.0)       # ...or this much change of the minimap picture
     home_match: FloatParam = FloatParam(0.6)           # minimap match needed to walk back to the trees
-    home_max_tiles: FloatParam = FloatParam(8.0)       # firemaking: farther than this from the trees -> walk back
+    home_max_tiles: FloatParam = FloatParam(8.0)       # farther than this from the trees -> walk back
+    home_tile: StringParam = StringParam("")           # "x,y" world tile of the trees (empty = where the bot starts)
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 1)      # can't light here: step this far (1 tile is enough)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
@@ -195,13 +196,11 @@ class BotExecutor(HumanMixin, Bot):
                       f"({'drop' if self.cfg.drop_items.value else 'bank'} mode)")
         self.human_init()
         self.set_activity("working")
-        if self.cfg.burn_logs.value:
-            # the run starts at the trees: remember them now (a restart mid-run too)
-            try:
-                self.remember_home()
-                self.log.info("Firemaking: remembered the minimap around the trees (the start area)")
-            except Exception:
-                self.log.warning("Couldn't remember the tree area yet", exc_info=True)
+        # the run starts at the trees: remember where (World Location tile; minimap fallback)
+        try:
+            self.remember_home()
+        except Exception:
+            self.log.warning("Couldn't remember the tree area yet", exc_info=True)
         
         while not self.terminate:
             try:
@@ -221,6 +220,7 @@ class BotExecutor(HumanMixin, Bot):
                         self.log.info("Inventory is full. Dropping logs...")
                         self.set_activity("dropping")
                         self.drop_logs()
+                        self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
                     else:
                         self.log.info("Inventory is full. Banking logs...")
                         if not self.bank_trip():
@@ -257,8 +257,7 @@ class BotExecutor(HumanMixin, Bot):
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
                             # firemaking drifts away from the trees (one tile per fire): go back
-                            if self.cfg.burn_logs.value and self.tree_waits >= 2 \
-                                    and self.go_home(max_tiles=3, label="the trees"):
+                            if self.tree_waits >= 2 and self.go_home(max_tiles=3, label="the trees"):
                                 self.tree_waits = 0
                                 continue
                             # all stumps: a good moment to wander a few steps

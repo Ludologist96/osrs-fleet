@@ -106,12 +106,23 @@ def read_rl_settings(n: int) -> dict:
 def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
     """RuneLite settings a bot needs, made from its saved config (so its targets/loot
     are set in one place: the bot's settings)."""
-    if bot != "slayer":
+    # every bot: the World Location plugin (Plugin Hub) shows the character's tile in the
+    # top-left corner (core/position.py reads it to walk back to the work area)
+    hub = [p.strip() for p in current.get("runelite.externalPlugins", "").split(",") if p.strip()]
+    loc = {"runelite.externalPlugins": ",".join(hub + [p for p in ["world-location"] if p not in hub]),
+           "runelite.worldlocationplugin": "true", "worldlocation.gridInfo": "true",
+           "worldlocation.gridInfoType": "UNIQUE_ID",
+           # no coordinates line in the mouse-over tooltip (the hover-text readers OCR it)
+           "worldlocation.tileLocation": "false"}
+    if bot not in ("slayer", "woodcutter"):
         return {}
+    if bot != "slayer":
+        return loc
     val = lambda k, d=None: (cfg.get(k) or {}).get("value", d)
-    want = {"runelite.npcindicatorsplugin": "true", "runelite.opponentinfoplugin": "true",
+    want = dict(loc)
+    want.update({"runelite.npcindicatorsplugin": "true", "runelite.opponentinfoplugin": "true",
             "npcindicators.highlightHull": "true", "npcindicators.ignoreDeadNpcs": "true",
-            "opponentinfo.showOpponentHealthOverlay": "true"}
+            "opponentinfo.showOpponentHealthOverlay": "true"})
     targets = val("targets") or []
     if targets:
         want["npcindicators.npcToHighlight"] = ", ".join(targets)

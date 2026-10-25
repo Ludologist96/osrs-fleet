@@ -46,6 +46,7 @@ class Camera:
         # False = never turn left/right (the minimap keeps its orientation, e.g. so a bot
         # can find its way back by matching the minimap); fidgets then zoom/tilt only.
         self.allow_rotate = True
+        self.turns = 0  # left/right turns so far (walking re-learns the minimap turn after one)
         self.log = get_logger("Camera")
 
     # ------------------------------------------------------------------
@@ -58,6 +59,7 @@ class Camera:
             time.sleep(seconds)
         finally:
             keyboard.release(key)
+        self.turns += 1
         self.log.debug(f"rotated {key} for {seconds:.2f}s")
 
     def tilt_up(self, seconds: float) -> None:
