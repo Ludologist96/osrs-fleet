@@ -32,7 +32,9 @@ _GLYPHS = {
 _TPL = {ch: np.array([[c == '#' for c in row] for row in s.split('/')], dtype=bool)
         for ch, s in _GLYPHS.items()}
 
-SEARCH = (0, 0, 420, 330)  # window area where the top-left overlays sit (they stack)
+SEARCH = (12, 0, 160, 330)  # window area of the top-left overlay panels (they stack; the
+                            # panels span x ~13-145: white things in the game world beside
+                            # them - a striped tent, a wall - merged their text lines)
 WHITE_MIN = 200            # text pixels: every channel >= this (shadow is black)
 WORD_GAP = 10              # px: the label and the numbers are ~25 px apart, digits 1-5
 
@@ -69,35 +71,44 @@ def _bands(w: np.ndarray) -> list[tuple[int, int]]:
     return out
 
 
-def _number_text(b: np.ndarray) -> str | None:
-    """The right-most word of a text band (the numbers), as text; None if unreadable."""
+def _words(b: np.ndarray) -> list[list[tuple[int, int]]]:
+    """Glyph column runs of a text band, grouped into words (gaps >= WORD_GAP)."""
     cols = b.any(axis=0)
-    xs = np.nonzero(cols)[0]
-    if not len(xs):
-        return None
-    # glyph runs from the right edge, stopping at the big gap before the label
-    runs, x = [], xs[-1]
-    while x >= 0:
+    words, cur, x, last_end = [], [], 0, None
+    n = len(cols)
+    while x < n:
         if cols[x]:
-            e = x
-            while x >= 0 and cols[x]:
-                x -= 1
-            runs.append((x + 1, e + 1))
+            s0 = x
+            while x < n and cols[x]:
+                x += 1
+            if last_end is not None and s0 - last_end >= WORD_GAP and cur:
+                words.append(cur)
+                cur = []
+            cur.append((s0, x))
+            last_end = x
         else:
-            gap_start = x
-            while x >= 0 and not cols[x]:
-                x -= 1
-            if gap_start - x >= WORD_GAP:
+            x += 1
+    if cur:
+        words.append(cur)
+    return words
+
+
+def _number_text(b: np.ndarray) -> str | None:
+    """The numbers of a text band: the right-most word made only of digits/commas (the
+    game world behind the panel can put white specks right of it)."""
+    for runs in reversed(_words(b)):
+        text = ''
+        for s0, e in runs:
+            g = b[:, s0:e]
+            r = np.nonzero(g.any(axis=1))[0]
+            ch = _classify(g[r[0]:r[-1] + 1])
+            if ch is None:
+                text = None
                 break
-    text = ''
-    for s, e in reversed(runs):
-        g = b[:, s:e]
-        r = np.nonzero(g.any(axis=1))[0]
-        ch = _classify(g[r[0]:r[-1] + 1])
-        if ch is None:
-            return None
-        text += ch
-    return text
+            text += ch
+        if text and any(c.isdigit() for c in text):
+            return text
+    return None
 
 
 def read_tile(sc) -> tuple[int, int, int] | None:

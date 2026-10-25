@@ -419,7 +419,8 @@ class HumanMixin:
         """(x, y, plane) or None."""
         from core.position import read_tile
         try:
-            t = read_tile(sc or self.client.get_screenshot())
+            sc = sc or self.client.get_screenshot()
+            t = read_tile(sc)
         except Exception:
             self.log.debug("tile read failed", exc_info=True)
             t = None
