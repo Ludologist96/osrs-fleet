@@ -225,7 +225,7 @@ class BotExecutor(HumanMixin, Bot):
                         # firemaking: light all logs once the inventory is full, then back to the trees
                         self.log.info("Inventory is full. Lighting the logs...")
                         self.burn_logs()
-                        self.go_home(max_tiles=2, label="the trees")
+                        self._go_trees(max_tiles=2)
                         if self.check_inventory_full():  # some logs couldn't be lit: drop them
                             self.set_activity("dropping")
                             self.drop_logs()
@@ -233,7 +233,7 @@ class BotExecutor(HumanMixin, Bot):
                         self.log.info("Inventory is full. Dropping logs...")
                         self.set_activity("dropping")
                         self.drop_logs()
-                        self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
+                        self._go_trees(max_tiles=self.cfg.home_max_tiles.value)
                     else:
                         self.log.info("Inventory is full. Banking logs...")
                         if not self.bank_trip():
@@ -255,6 +255,7 @@ class BotExecutor(HumanMixin, Bot):
                             self.maybe_camera_fidget()
                             self.maybe_forced_break("max_trees_before_forced_break")
                         self.chop_tree()
+                        self._note_tree_spot()
                         self.chopped_once = True
                         self.tree_waits = 0
                     except ScriptTerminationException:
@@ -272,7 +273,7 @@ class BotExecutor(HumanMixin, Bot):
                                 self.log.error(f"No marked tree for {self.tree_waits} tries in a row. Stopping.")
                                 return
                             # firemaking drifts away from the trees (one tile per fire): go back
-                            if self.tree_waits >= 2 and self.go_home(max_tiles=3, label="the trees"):
+                            if self.tree_waits >= 1 and self._go_trees(max_tiles=3):
                                 self.tree_waits = 0
                                 continue
                             # all stumps: a good moment to wander a few steps
@@ -329,6 +330,36 @@ class BotExecutor(HumanMixin, Bot):
                     time.sleep(3)  # Wait a bit before retrying
 
     # ------------------------------------------------------------------ banking
+    # ------------------------------------------------------------------ the tree spot
+    def _note_tree_spot(self) -> None:
+        """Where it stands when it clicks a tree = the tree spot (where it walks back to
+        after the bank, or when no tree is in view). Learnt from chopping, so a run
+        started somewhere else (e.g. in the bank) still finds its way to the trees."""
+        t = self.my_tile()
+        if t:
+            if not getattr(self, "_tree_spot", None):
+                self.log.info(f"Tree spot: {t[0]}, {t[1]}")
+            self._tree_spot = t
+
+    def _go_trees(self, max_tiles: float, near: float = 0.0) -> bool:
+        spot = getattr(self, "_tree_spot", None)
+        if not spot:
+            return self.go_home(max_tiles=max_tiles, label="the trees")
+        cur = self.my_tile()
+        if not cur:
+            return False
+        dist = math.hypot(spot[0] - cur[0], spot[1] - cur[1])
+        if dist <= max(1.0, max_tiles):
+            return False
+        self.log.info(f"Back to the trees: {dist:.0f} tiles away")
+        prev = self.activity
+        self.set_activity("walking")
+        try:
+            self.walk_to_tile(spot, tol=1.5, label="the trees", near=near)
+        finally:
+            self.set_activity(prev if prev not in (None, "walking") else "working")
+        return True
+
     # F2P banks: a tile inside, near the bankers (the walk only needs to get the bankers on
     # screen; the bank click walks the rest). Nearest one to the trees is used.
     KNOWN_BANKS = {
@@ -367,20 +398,19 @@ class BotExecutor(HumanMixin, Bot):
             try:
                 self.set_activity("walking to bank")
                 self.log.info(f"To the {name} bank ({bank[0]}, {bank[1]})")
-                self.walk_to_tile(bank, tol=3.0, label=f"the {name} bank")
+                self.walk_to_tile(bank, tol=3.0, label=f"the {name} bank", near=3)
                 self.set_activity("banking")
                 if not self.bank_logs():
                     raise RuntimeError("couldn't bank the logs")
                 self.set_activity("walking to trees")
-                self.log.info("Back to the trees...")
-                self.go_home(max_tiles=1, label="the trees")
+                self._go_trees(max_tiles=2, near=4)
                 return True
             except ScriptTerminationException:
                 raise
             except Exception as e:
                 self.log.error(f"Bank trip failed (attempt {attempt}/2): {e}", exc_info=True)
                 time.sleep(random.uniform(1.5, 3.0))
-        self.go_home(max_tiles=1, label="the trees")
+        self._go_trees(max_tiles=2)
         return False
 
     # ------------------------------------------------------------------ the bank itself
@@ -456,8 +486,11 @@ class BotExecutor(HumanMixin, Bot):
                 return True
             boxes = self._banker_blobs(self.client.get_screenshot())
             if not boxes:
+                if i < 2:  # still walking in / a player in front: look again first
+                    time.sleep(random.uniform(0.5, 0.8))
+                    continue
                 self.log.info(f"No highlighted banker on screen ({i + 1}/4): looking around")
-                self.camera.search(self.cfg.camera_search_time.value, i + 1)
+                self.camera.search(self.cfg.camera_search_time.value, i - 1)
                 continue
             target = boxes[min(len(boxes) - 1, random.choice((0, 0, 0, 1)))]
             self.client.click(target, click_type=ClickType.RIGHT)

@@ -437,19 +437,22 @@ class HumanMixin:
         cur = self.my_tile()
         return math.hypot(target[0] - cur[0], target[1] - cur[1]) if cur else float("nan")
 
-    def _wait_stopped(self, start, timeout: float):
-        """Poll the tile until the character stands still; returns the last tile."""
+    def _wait_stopped(self, start, timeout: float, target=None, near: float = 0.0):
+        """Poll the tile until the character stands still (or, with `near`, until it is
+        that close to `target` - the next click can go in while it still walks)."""
         last, same, moved, t0 = start, 0, False, time.time()
         while time.time() - t0 < timeout:
-            self.sleep_checked(random.uniform(0.5, 0.7))  # ~1 game tick
+            self.sleep_checked(random.uniform(0.3, 0.4))  # the tile changes every game tick (0.6 s)
             t = self.my_tile()
             if t is None:
                 continue
+            if near and target and math.hypot(target[0] - t[0], target[1] - t[1]) <= near:
+                return t
             if t != last:
                 moved, same, last = True, 0, t
             else:
                 same += 1
-                if (moved and same >= 2) or same >= 4:
+                if (moved and same >= 2) or same >= 6:
                     break
         return last
 
@@ -499,7 +502,7 @@ class HumanMixin:
         return g.start_x + MINIMAP_FROM_GLOBE[0], g.start_y + MINIMAP_FROM_GLOBE[1]
 
     def walk_to_tile(self, target, tol: float = 1.5, label: str = "the target",
-                     max_clicks: int = 14) -> bool:
+                     max_clicks: int = 14, near: float = 0.0) -> bool:
         """Walk to a world tile with minimap clicks. True when within `tol` tiles.
         Each click: read the tile (World Location panel) and the camera turn (compass),
         click the minimap toward the target, wait until the character stands still."""
@@ -547,7 +550,12 @@ class HumanMixin:
                   int(round(cy + step * ppt * math.sin(ang) + random.uniform(-1, 1))))
             self.client.click(pt)
             self.log.debug(f"Walk click at {pt} (minimap centre {cx:.1f},{cy:.1f}, {ppt:.2f} px/tile)")
-            end = self._wait_stopped(cur, timeout=3.0 + step * 0.7)
+            arriving = near and step >= dist - 0.5  # this click goes all the way
+            end = self._wait_stopped(cur, timeout=3.0 + step * 0.7, target=target,
+                                     near=near if arriving else 0.0)
+            if arriving and math.hypot(target[0] - end[0], target[1] - end[1]) <= near:
+                self.log.info(f"Almost at {label} ({end[0]}, {end[1]}): going on")
+                return True
             mx, my = end[0] - cur[0], end[1] - cur[1]
             moved = math.hypot(mx, my)
             self.log.info(f"Walk: {cur[0]},{cur[1]} -> {end[0]},{end[1]} (wanted {step:.1f} tiles "
