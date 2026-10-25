@@ -119,7 +119,8 @@ class BotConfig(BotConfigMixin):
     fire_tile: StringParam = StringParam("")           # "x,y" where the fire lines start (empty = learnt from the first fires)
     fire_lane_tiles: IntParam = IntParam(12)           # a line of fires this long: back to the fire spot, one row over
     xp_drop_match: FloatParam = FloatParam(0.75)       # firemaking XP drop icon match (= the fire is lit)
-    bank_tile: RGBParam = RGBParam(0, 255, 0)  # Green by default, only used when banking
+    bank_tile: RGBParam = RGBParam(0, 255, 0)  # colour the launcher highlights the bankers in (bank mode)
+    bank_max_tiles: IntParam = IntParam(80)    # use the nearest known F2P bank when it's this close to the trees
     bank_to_trees: RouteParam = RouteParam([
         # WaypointParam(3094, 3244, 0, 790933, 8),
         WaypointParam(3105, 3240, 0, 790932, 8),
@@ -259,7 +260,7 @@ class BotExecutor(HumanMixin, Bot):
                     except Exception as e:
                         if self.terminate:
                             break
-                        if self.cfg.drop_items.value:
+                        if True:  # drop and bank mode alike (bank mode used to walk the old route here)
                             # Marked trees are stumps (their marker disappears): wait for respawn.
                             self.tree_waits += 1
                             self.set_activity("waiting for trees")
@@ -324,29 +325,201 @@ class BotExecutor(HumanMixin, Bot):
                     time.sleep(3)  # Wait a bit before retrying
 
     # ------------------------------------------------------------------ banking
+    # F2P banks: a tile inside, near the bankers (the walk only needs to get the bankers on
+    # screen; the bank click walks the rest). Nearest one to the trees is used.
+    KNOWN_BANKS = {
+        "Draynor": (3092, 3243), "Varrock West": (3185, 3438), "Varrock East": (3253, 3421),
+        "Falador East": (3013, 3356), "Falador West": (2946, 3369), "Edgeville": (3094, 3491),
+        "Al Kharid": (3269, 3167),
+    }
+
+    def _bank_target(self):
+        """(name, tile) of the bank to use: the known F2P bank nearest to the trees, else
+        the bank end of the saved route."""
+        home = getattr(self, "_home_tile", None) or self.my_tile()
+        if home:
+            name, t = min(self.KNOWN_BANKS.items(),
+                          key=lambda kv: math.hypot(kv[1][0] - home[0], kv[1][1] - home[1]))
+            if math.hypot(t[0] - home[0], t[1] - home[1]) <= self.cfg.bank_max_tiles.value:
+                return name, (t[0], t[1], 0)
+        route = list(self.cfg.bank_to_trees.value or [])
+        if route:
+            wp = route[0].value if hasattr(route[0], "value") else route[0]
+            x, y = (wp["x"], wp["y"]) if isinstance(wp, dict) else (wp.x, wp.y)
+            return "route", (x, y, 0)
+        return None, None
+
     def bank_trip(self) -> bool:
-        """Walk to the bank, deposit, walk back. The whole trip is tried once more if any
-        part of it fails."""
+        """Walk to the nearest bank (world tiles, `walk_to_tile`), open it on a banker
+        (NPC Indicators highlight "Banker" in the bank_tile colour; the launcher sets that),
+        deposit everything but the keep items, walk back to the start spot. Tried twice."""
+        name, bank = self._bank_target()
+        if not bank:
+            self.log.error("No bank known near the trees")
+            return False
         for attempt in (1, 2):
             if self.terminate:
                 return True
             try:
                 self.set_activity("walking to bank")
-                self.log.info("Traveling to bank...")
-                self.mover.execute_route(self.cfg.bank_to_trees.reverse())
+                self.log.info(f"To the {name} bank ({bank[0]}, {bank[1]})")
+                self.walk_to_tile(bank, tol=3.0, label=f"the {name} bank")
                 self.set_activity("banking")
                 if not self.bank_logs():
                     raise RuntimeError("couldn't bank the logs")
                 self.set_activity("walking to trees")
-                self.log.info("Returning to trees...")
-                self.mover.execute_route(self.cfg.bank_to_trees)
+                self.log.info("Back to the trees...")
+                self.go_home(max_tiles=1, label="the trees")
                 return True
             except ScriptTerminationException:
                 raise
             except Exception as e:
-                self.log.error(f"Bank trip failed (attempt {attempt}/2): {e}")
+                self.log.error(f"Bank trip failed (attempt {attempt}/2): {e}", exc_info=True)
                 time.sleep(random.uniform(1.5, 3.0))
+        self.go_home(max_tiles=1, label="the trees")
         return False
+
+    # ------------------------------------------------------------------ the bank itself
+    def _banker_blobs(self, sc):
+        """Boxes of the highlighted bankers (NPC Indicators hull in the bank_tile colour)
+        in the game view, nearest to the character first."""
+        import cv2
+        import numpy as np
+        from core.camera import GAME_VIEW
+        x1, y1, x2, y2 = 4, 4, 512, 334  # the game view (window coords)
+        a = np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2))).astype(int)
+        r, g, b = self.cfg.bank_tile.value
+        m = ((abs(a[:, :, 0] - r) <= 30) & (abs(a[:, :, 1] - g) <= 30) & (abs(a[:, :, 2] - b) <= 30)).astype(np.uint8)
+        # the top-left overlays (tile panel...) never hold a banker
+        m[:150, :160] = 0
+        n, lab, st, cen = cv2.connectedComponentsWithStats(cv2.dilate(m, np.ones((5, 5), np.uint8)))
+        px, py = self.PLAYER_PT
+        boxes = []
+        for k in range(1, n):
+            x, y, w, h, area = st[k]
+            if area < 60 or w < 10 or h < 15:
+                continue
+            boxes.append((math.hypot(x1 + x + w / 2 - px, y1 + y + h / 2 - py),
+                          MatchResult(x1 + x + w // 4, y1 + y + h // 4, x1 + x + 3 * w // 4, y1 + y + 3 * h // 4)))
+        return [b for _, b in sorted(boxes, key=lambda t: t[0])]
+
+    def _menu_click(self, words) -> bool:
+        """Read the open right-click menu line by line; click the first line naming one of
+        `words`. Leaves the menu (closing it) when nothing matches."""
+        from core import ocr
+        from core.input.mouse_control import click
+        sc = self.client.get_screenshot()
+        try:
+            menu = self.client.get_right_click_menu(sc)
+        except Exception as e:
+            self.log.debug(f"No right-click menu: {e}")
+            return False
+        header, line = 19, 15
+        n = max(1, round((menu.height - header) / line))
+        seen = []
+        for i in range(n):
+            y = menu.start_y + header + i * line
+            row = MatchResult(menu.start_x + 3, y, menu.end_x - 3, y + line)
+            img = tools.mask_above_color_value(row.crop_in(sc), 150)
+            try:
+                text = ocr.execute(img, font=ocr.FontChoice.RUNESCAPE_BOLD_12,
+                                   psm=ocr.TessPsm.SINGLE_LINE, raise_on_blank=False).strip().lower()
+            except Exception:
+                text = ""
+            seen.append(text)
+            if any(w in text for w in words) and "talk" not in text:
+                target = MatchResult(row.start_x + 4, y + 3, min(row.end_x - 4, row.start_x + 60), y + line - 3)
+                self.client.move_to(target.get_point_within(), rand_move_chance=0)
+                click(-1, -1)
+                self.log.debug(f"Menu {seen}: clicked '{text}'")
+                return True
+        self.log.info(f"Menu {seen}: no bank option")
+        # move clearly off the menu: it closes
+        self.client.move_to((max(10, menu.start_x - random.randint(40, 80)), menu.start_y + random.randint(0, 40)))
+        return False
+
+    def _open_bank(self) -> bool:
+        from core.input.mouse_control import ClickType
+        for i in range(4):
+            if self.terminate:
+                return False
+            if self.bank.is_open:
+                return True
+            boxes = self._banker_blobs(self.client.get_screenshot())
+            if not boxes:
+                self.log.info(f"No highlighted banker on screen ({i + 1}/4): looking around")
+                self.camera.search(self.cfg.camera_search_time.value, i + 1)
+                continue
+            target = boxes[min(len(boxes) - 1, random.choice((0, 0, 0, 1)))]
+            self.client.click(target, click_type=ClickType.RIGHT)
+            time.sleep(random.uniform(0.15, 0.3))
+            if not self._menu_click(["bank"]):
+                continue
+            end = time.time() + 10  # it walks to the banker first
+            while time.time() < end and not self.terminate:
+                time.sleep(0.4)
+                if self.bank.is_open:
+                    self.log.info("Bank open")
+                    return True
+            self.log.info("The bank didn't open")
+        return False
+
+    def _deposit_all_but_keep(self) -> int:
+        """Click every inventory item that isn't a keep item (axe, tinderbox) with the
+        bank's quantity on "All": one click deposits all of that kind. Returns the clicks."""
+        try:
+            self.bank.set_quantity_setting("All")
+            time.sleep(random.uniform(0.3, 0.6))
+        except Exception:
+            self.log.debug("couldn't set the bank quantity to All", exc_info=True)
+        clicks = 0
+        for _ in range(30):
+            if self.terminate:
+                break
+            sc = self.client.get_screenshot()
+            used = inventory.used_slots(sc)
+            keep = []
+            try:
+                keep = self.client.get_inv_items(list(self.cfg.keep_items.value), min_confidence=0.9,
+                                                 verify_tab=False)
+            except Exception:
+                pass
+            keep_slots = {self.inv_slot(k).bounding_box[:2] for k in keep}
+            rest = [u for u in used if self.inv_slot(u).bounding_box[:2] not in keep_slots]
+            if not rest:
+                break
+            self.click_inv(random.choice(rest[:4]))
+            clicks += 1
+            time.sleep(random.uniform(0.5, 0.9))  # the game moves items on its tick
+        return clicks
+
+    def bank_logs(self):
+        """Open the bank on a banker, deposit all but the keep items, leave it open (the
+        walk back closes it)."""
+        self.log.info("Banking logs...")
+        try:
+            n_logs = len(self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9))
+        except Exception:
+            n_logs = 0
+        if not self._open_bank():
+            self.log.warning("Couldn't open the bank")
+            return False
+        self._deposit_all_but_keep()
+        left = 0
+        try:
+            left = len(self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9, verify_tab=False))
+        except Exception:
+            pass
+        if n_logs:
+            self.count("banked", max(0, n_logs - left))
+        self.log.info(f"Banked {max(0, n_logs - left)} logs")
+        self._last_used = None
+        try:
+            if random.random() < 0.5:
+                self.bank.close()
+        except Exception:
+            self.log.debug("bank close failed", exc_info=True)
+        return left == 0
 
     # ------------------------------------------------------------------ chopping
     def _color_order(self) -> list:
@@ -1058,57 +1231,6 @@ class BotExecutor(HumanMixin, Bot):
             raise
         except Exception as e:
             raise RuntimeError(f"Failed to drop items: {e}")
-
-    def bank_logs(self):
-        """Bank all logs and prepare for the next woodcutting run"""
-        self.log.info("Banking logs...")
-        
-        try:
-            try:
-                n_logs = len(self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9))
-            except Exception:
-                n_logs = 0
-            # Click on the bank tile
-            self.client.smart_click_tile(
-                self.cfg.bank_tile.value,
-                ['bank', 'banker', 'booth', 'chest'],
-                retry_hover=3,
-                retry_match=2,
-                filter_ui=True
-            )
-            
-            # Wait for character to stop moving (bounded)
-            deadline = time.time() + 20
-            while time.time() < deadline and not self.terminate and self.client.is_moving():
-                time.sleep(0.2)
-            
-            # Wait for bank interface to open
-            timeout = 5
-            start_time = time.time()
-            while not self.bank.is_open:
-                if self.terminate:
-                    return False
-                if time.time() - start_time > timeout:
-                    self.log.warning("Timed out waiting for bank to open")
-                    return False
-                time.sleep(0.5)
-            
-            # Deposit all items
-            self.bank.deposit_inv()
-            time.sleep(random.uniform(0.5, 1.0))
-            
-            # Close bank
-            self.bank.close()
-            if n_logs:
-                self.count("banked", n_logs)
-            self._last_used = None
-            return True
-            
-        except ScriptTerminationException:
-            raise
-        except Exception as e:
-            self.log.error(f"Error banking logs: {e}")
-            return False
 
 # For direct execution
 if __name__ == "__main__":

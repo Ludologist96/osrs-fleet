@@ -128,6 +128,18 @@ def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
            "minimap.zoom": "true", "minimap.zoomLevel": "4.0"}
     if bot not in ("slayer", "woodcutter"):
         return {}
+    if bot == "woodcutter":
+        val = lambda k, d=None: (cfg.get(k) or {}).get("value", d)
+        if val("drop_items", True) is False:
+            # bank mode: the bot opens the bank on a banker - highlight them
+            want = dict(loc)
+            want.update({"runelite.npcindicatorsplugin": "true", "npcindicators.highlightHull": "true",
+                         "npcindicators.npcToHighlight": "Banker"})
+            bt = val("bank_tile")
+            if bt:
+                want["npcindicators.npcColor"] = _argb(bt["rgb"])
+            return want
+        return loc
     if bot != "slayer":
         return loc
     val = lambda k, d=None: (cfg.get(k) or {}).get("value", d)

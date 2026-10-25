@@ -984,7 +984,21 @@ class RuneLiteClient(GenericWindow):
         return positions[0].tile != positions[1].tile
     
     @timeit
-    def get_position(self,retry_cnt=0) -> 'PlayerPosition':
+    def get_position(self, retry_cnt=0) -> 'PlayerPosition':
+        """The character's tile from the World Location plugin panel (core/position.py)."""
+        from core.position import read_tile
+        for i in range(retry_cnt + 1):
+            t = read_tile(self.get_screenshot())
+            if t:
+                x, y, z = t
+                return PlayerPosition(tile=(x, y, z), chunk=((x >> 3) << 11) | (y >> 3),
+                                      region=((x >> 6) << 8) | (y >> 6))
+            if i < retry_cnt:
+                time.sleep(0.5)
+        raise RuntimeError('No position: the World Location plugin panel (Grid Info) is not readable')
+
+    @timeit
+    def _get_position_old(self,retry_cnt=0) -> 'PlayerPosition':
         def do_ocr(match: MatchResult, sc: Image.Image) -> str:
             return read_location_numbers(match.crop_in(sc))
         sc = self.get_screenshot()
