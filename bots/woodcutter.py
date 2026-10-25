@@ -565,7 +565,7 @@ class BotExecutor(HumanMixin, Bot):
             self.click_inv(log_slot)
             # the cursor on the slot looks like an item: move it off before looking
             self._mouse_off_inventory()
-            if self._wait_gone(log_slot, 1.0, while_selected=tinder):
+            if self._wait_gone(log_slot, 0.8, while_selected=tinder):
                 return "started"
             if self._selected(tinder):
                 self.log.info("The log click didn't land (tinderbox still selected): clicking it again")
@@ -938,6 +938,9 @@ class BotExecutor(HumanMixin, Bot):
                 self._fire_spot = (streak_start[0], streak_start[1])
                 self._fire_row = 0
                 self.log.info(f"Fire spot learnt: {self._fire_spot} (3 fires in a row lit from there)")
+            # the character steps off the fire now; a log click during that step is often
+            # ignored by the game (tinderbox stays selected): let it finish first
+            self._settle(3.0)
             time.sleep(self.cfg.fire_step_wait.choose())
             self.control.propose_break()
         self._fire_row += 1  # next inventory: the next row (old fires may still burn)
