@@ -565,7 +565,9 @@ class BotExecutor(HumanMixin, Bot):
             self.click_inv(log_slot)
             # the cursor on the slot looks like an item: move it off before looking
             self._mouse_off_inventory()
-            if self._wait_gone(log_slot, 0.8, while_selected=tinder):
+            # the game answers on its next tick (0.6 s) - through the proxy sometimes later:
+            # clicking again too soon selects the log instead (seen: deselected after 0.9 s)
+            if self._wait_gone(log_slot, 1.8, while_selected=tinder):
                 return "started"
             if self._selected(tinder):
                 self.log.info("The log click didn't land (tinderbox still selected): clicking it again")
