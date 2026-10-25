@@ -478,11 +478,17 @@ class BotExecutor(HumanMixin, Bot):
         except Exception:
             self.log.debug("couldn't set the bank quantity to All", exc_info=True)
         clicks = 0
+        menu_mode = False  # the quantity button isn't on All: right-click -> Deposit-All
+        last_used = None
         for _ in range(30):
             if self.terminate:
                 break
             sc = self.client.get_screenshot()
             used = inventory.used_slots(sc)
+            if last_used is not None and not menu_mode and last_used - len(used) <= 1 and len(used) > 4:
+                self.log.info("One item per click: using right-click Deposit-All")
+                menu_mode = True
+            last_used = len(used)
             keep = []
             try:
                 keep = self.client.get_inv_items(list(self.cfg.keep_items.value), min_confidence=0.9,
@@ -493,7 +499,15 @@ class BotExecutor(HumanMixin, Bot):
             rest = [u for u in used if self.inv_slot(u).bounding_box[:2] not in keep_slots]
             if not rest:
                 break
-            self.click_inv(random.choice(rest[:4]))
+            pick = random.choice(rest[:4])
+            if menu_mode:
+                from core.input.mouse_control import ClickType
+                self.client.click(self.inv_point(pick), click_type=ClickType.RIGHT)
+                time.sleep(random.uniform(0.2, 0.35))
+                if not self._menu_click(["deposit-all", "deposit-al", "-all"]):
+                    menu_mode = False  # fall back to plain clicks
+            else:
+                self.click_inv(pick)
             clicks += 1
             time.sleep(random.uniform(0.5, 0.9))  # the game moves items on its tick
         return clicks
