@@ -476,8 +476,7 @@ class HumanMixin:
         """Where the character is on the minimap (window coords), from the world-map orb."""
         from core.position import MINIMAP_FROM_GLOBE
         g = self.client.minimap.globe
-        ox, oy = getattr(self, "_mm_centre_fix", (0.0, 0.0))
-        return g.start_x + MINIMAP_FROM_GLOBE[0] + ox, g.start_y + MINIMAP_FROM_GLOBE[1] + oy
+        return g.start_x + MINIMAP_FROM_GLOBE[0], g.start_y + MINIMAP_FROM_GLOBE[1]
 
     def walk_to_tile(self, target, tol: float = 1.5, label: str = "the target",
                      max_clicks: int = 14) -> bool:
@@ -531,19 +530,6 @@ class HumanMixin:
                     return False
                 continue
             stuck = 0
-            if sure and moved >= 3 and abs(moved - step) < 2.5:
-                # a clean walk: where should the minimap centre have been for this click
-                # to lead exactly here? (a few px off = every click lands tiles away)
-                vx, vy = mx * ppt, -my * ppt  # the move on a north-up minimap (px)
-                c, s_ = math.cos(yaw), math.sin(yaw)
-                ix = pt[0] - (vx * c - vy * s_)
-                iy = pt[1] - (vx * s_ + vy * c)
-                ex, ey = ix - cx, iy - cy
-                if math.hypot(ex, ey) < 25:
-                    fx, fy = getattr(self, "_mm_centre_fix", (0.0, 0.0))
-                    self._mm_centre_fix = (fx + 0.4 * ex, fy + 0.4 * ey)
-                    self.log.debug(f"Minimap centre correction now {self._mm_centre_fix[0]:+.1f},"
-                                   f"{self._mm_centre_fix[1]:+.1f} px (this walk said {ex:+.1f},{ey:+.1f})")
             if moved >= 2.5:
                 err = self._wrap(ang - math.atan2(-my, mx) - yaw)
                 if not sure:
