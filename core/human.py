@@ -506,6 +506,7 @@ class HumanMixin:
         # minimap px per tile = RuneLite's minimap zoom (the launcher sets 4.0); refined below
         ppt = getattr(self, "_mm_ppt", float(_v(self.cfg, "minimap_px_per_tile", 4.0)))
         stuck = 0
+        stall, last_dist = 0, None
         mm = self.client.minimap.map
         rad_px = min(mm.width, mm.height) / 2 - 14
         for i in range(max_clicks):
@@ -521,6 +522,14 @@ class HumanMixin:
                 if i:
                     self.log.info(f"Back at {label} ({cur[0]}, {cur[1]}) after {i} click(s)")
                 return True
+            # within a few tiles but tiny clicks don't get closer (the tile is taken, or a
+            # 1-tile minimap click lands next to it): near enough
+            if last_dist is not None and dist <= 2.5 and dist >= last_dist - 0.3:
+                stall += 1
+                if stall >= 2:
+                    self.log.info(f"Near {label} ({cur[0]}, {cur[1]}, {dist:.1f} tiles): good enough")
+                    return True
+            last_dist = dist
             yaw = self.minimap_turn(sc)
             sure = yaw is not None
             if not sure:

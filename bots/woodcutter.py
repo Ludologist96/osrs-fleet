@@ -779,25 +779,44 @@ class BotExecutor(HumanMixin, Bot):
             self.log.warning(f"Tile setting '{txt}' is not 'x,y': ignored")
             return None
 
+    FIRE_ROWS = (0, 1, -1, 2, -2, 3, -3)
+
     def _fire_lane_start(self):
-        """Where the next line of fires starts: the fire spot, one row further each time."""
+        """Where the next line of fires starts: the fire spot, on the current row."""
         fx, fy = self._fire_spot
-        rows = (0, 1, -1, 2, -2)
-        dy = rows[self._fire_row % len(rows)]
+        dy = self.FIRE_ROWS[self._fire_row % len(self.FIRE_ROWS)]
         return fx, fy + dy, 0
+
+    def _next_row(self) -> bool:
+        """Move on to the next row that hasn't failed twice. False (and the fire spot is
+        dropped, to look for a new one) when every row keeps failing."""
+        fails = getattr(self, "_row_fails", {})
+        for _ in range(len(self.FIRE_ROWS)):
+            self._fire_row += 1
+            dy = self.FIRE_ROWS[self._fire_row % len(self.FIRE_ROWS)]
+            if fails.get(dy, 0) < 2:
+                return True
+        self.log.warning(f"Every row at the fire spot {self._fire_spot} is blocked: looking for a new spot")
+        self._bad_spots = getattr(self, "_bad_spots", set()) | {self._fire_spot}
+        self._fire_spot = None
+        self._scout = None
+        self._row_fails = {}
+        return False
 
     def _to_fire_spot(self, why: str) -> None:
         if not getattr(self, "_fire_spot", None):
             return
         target = self._fire_lane_start()
         cur = self.my_tile()
-        if cur and abs(cur[0] - target[0]) <= 1 and abs(cur[1] - target[1]) <= 0:
+        if cur and abs(cur[0] - target[0]) <= 1 and abs(cur[1] - target[1]) <= 1:
             return
         self.log.info(f"To the fire spot ({why}): {target[0]}, {target[1]}")
         prev = self.activity
         self.set_activity("walking")
         try:
-            self.walk_to_tile(target, tol=0.5, label="the fire spot")
+            # near enough is fine: the line starts wherever it stands (a 1-tile minimap
+            # click often lands next to the target - that once took 35 s of tiny clicks)
+            self.walk_to_tile(target, tol=1.2, label="the fire spot", max_clicks=5)
         finally:
             self.set_activity(prev or "firemaking")
 
@@ -816,13 +835,16 @@ class BotExecutor(HumanMixin, Bot):
         if not home:
             return False
         if getattr(self, "_scout", None) is None:
+            # fires push the character west, so a spot needs open ground to its west
             spots = []
-            for r in (4, 6, 8):
+            for r in (6, 4, 8):
                 ring = [(home[0] + dx * r, home[1] + dy * r)
                         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))]
                 random.shuffle(ring)
                 spots += ring
-            self._scout = spots
+            bad = getattr(self, "_bad_spots", set())
+            self._scout = [p for p in spots
+                           if all(abs(p[0] - b[0]) + abs(p[1] - b[1]) > 2 for b in bad)]
         while self._scout:
             tx, ty = self._scout.pop(0)
             self.log.info(f"Looking for a fire spot: trying {tx}, {ty}")
@@ -841,12 +863,16 @@ class BotExecutor(HumanMixin, Bot):
         if not hasattr(self, "_fire_spot"):
             self._fire_spot = self._parse_tile(self.cfg.fire_tile.value)
             self._fire_row = 0
+            self._row_fails = {}
+            # how many fires fit in a line before something blocks it (learnt)
+            self._lane_len = int(self.cfg.fire_lane_tiles.value)
             if self._fire_spot:
                 self.log.info(f"Fire spot from the settings: {self._fire_spot}")
         self.set_activity("firemaking")
         self._to_fire_spot("inventory full")
         self._settle()
         lane_start = self.my_tile()
+        row_fires = 0      # fires lit on this line so far
         clean_streak = 0   # fires lit in a row without a step aside (to learn a fire spot)
         streak_start = None
         for _ in range(28):
@@ -865,12 +891,12 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.info(f"Tinderbox in inventory slot at {self._tinder.bounding_box[:2]}")
             self.set_activity("firemaking")
             # a long line: back to the fire spot, next row
-            cur = self.my_tile()
-            if self._fire_spot and cur and lane_start and \
-                    math.hypot(cur[0] - lane_start[0], cur[1] - lane_start[1]) >= self.cfg.fire_lane_tiles.value:
-                self._fire_row += 1
-                self._to_fire_spot("end of the line")
+            if self._fire_spot and row_fires >= self._lane_len:
+                self._next_row()
+                self._to_fire_spot(f"line of {row_fires} fires done")
+                self._settle()
                 lane_start = self.my_tile()
+                row_fires = 0
             lit = False
             moves = 0
             misses = 0
@@ -906,16 +932,23 @@ class BotExecutor(HumanMixin, Bot):
                     if not self._scout_next():
                         break
                     moves = 0
-                elif moves < int(self.cfg.fire_moves.value):
+                elif moves < 6:
+                    # the line is blocked (trees, old fires): next row, not a random step
+                    # onto the fires just lit
                     moves += 1
-                    self.log.info(f"Can't light a fire here: one step aside "
-                                  f"({moves}/{int(self.cfg.fire_moves.value)})")
-                    self.step_aside()
-                elif moves == int(self.cfg.fire_moves.value):
-                    moves += 1
-                    self._fire_row += 1
-                    self._to_fire_spot("blocked here")
+                    dy = self.FIRE_ROWS[self._fire_row % len(self.FIRE_ROWS)]
+                    if row_fires == 0:
+                        self._row_fails[dy] = self._row_fails.get(dy, 0) + 1
+                    elif row_fires >= 2:
+                        self._lane_len = max(2, row_fires)  # next lines stop before the block
+                    self.log.info(f"Can't light a fire here (line of {row_fires}): next row")
+                    if self._next_row():
+                        self._to_fire_spot("line blocked")
+                    elif not self._scout_next():
+                        self.set_activity("firemaking")
+                        break
                     lane_start = self.my_tile()
+                    row_fires = 0
                 else:
                     self.set_activity("firemaking")
                     break
@@ -928,16 +961,20 @@ class BotExecutor(HumanMixin, Bot):
                 self._tinder = None  # check where the tinderbox is next time
                 break
             burned += 1
+            row_fires += 1
             clean_streak = clean_streak + 1 if moves == 0 else 1
             if clean_streak == 1:
                 streak_start = here
             self.count("burned")
             self.log.info(f"Fire lit ({self.counts.get('burned', 0)} so far)")
-            if not self._fire_spot and clean_streak >= 3 and streak_start:
-                # three fires in a row lit fine from there: that's the fire spot
+            if not self._fire_spot and clean_streak >= 5 and streak_start:
+                # five fires in a line lit fine from there: that's the fire spot
                 self._fire_spot = (streak_start[0], streak_start[1])
                 self._fire_row = 0
-                self.log.info(f"Fire spot learnt: {self._fire_spot} (3 fires in a row lit from there)")
+                self._row_fails = {}
+                self._lane_len = int(self.cfg.fire_lane_tiles.value)
+                lane_start, row_fires = streak_start, clean_streak
+                self.log.info(f"Fire spot learnt: {self._fire_spot} (5 fires in a line lit from there)")
             # the character steps off the fire now; a log click during that step is often
             # ignored by the game (tinderbox stays selected): let it finish first
             self._settle(3.0)
