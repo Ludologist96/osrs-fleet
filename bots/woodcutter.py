@@ -546,6 +546,7 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.debug("A log was selected: using it on the tinderbox")
                 log_slot = self.inv_slot(sel_log)
                 self.click_inv(tinder)
+                self._mouse_off_inventory()
                 return "started" if self._wait_gone(log_slot, 1.2) else "missed"
             for i in range(3):
                 self.click_inv(tinder)
@@ -562,6 +563,8 @@ class BotExecutor(HumanMixin, Bot):
             chat_before = None
         for i in range(2):
             self.click_inv(log_slot)
+            # the cursor on the slot looks like an item: move it off before looking
+            self._mouse_off_inventory()
             if self._wait_gone(log_slot, 1.0, while_selected=tinder):
                 return "started"
             if self._selected(tinder):
@@ -582,6 +585,12 @@ class BotExecutor(HumanMixin, Bot):
         if self._selected(tinder):
             self.click_inv(tinder)  # put it down for a clean next try
         return "missed"
+
+    def _mouse_off_inventory(self) -> None:
+        """Mouse into the game view (where it rests while the fire is lit)."""
+        from core.camera import GAME_VIEW
+        x1, y1, x2, y2 = GAME_VIEW
+        self.client.move_to((random.randint(x1 + 20, x2 - 20), random.randint(y1 + 20, y2 - 20)))
 
     def _wait_gone(self, slot: MatchResult, timeout: float, while_selected: MatchResult | None = None) -> bool:
         """Poll until the slot is empty. With `while_selected`, give up early once that
@@ -727,9 +736,6 @@ class BotExecutor(HumanMixin, Bot):
         """The log is on the ground and the character kneels. Clicking anything now stops
         it. Lit = a firemaking XP drop appears, or the character steps off the fire (its
         tile changes / the minimap moves). Returns 'lit' or 'failed'."""
-        from core.camera import GAME_VIEW
-        x1, y1, x2, y2 = GAME_VIEW
-        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))  # off the inventory
         t0 = time.time()
         tile0 = self.my_tile()
         ref = self._minimap_gray()
