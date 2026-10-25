@@ -57,7 +57,7 @@ class HumanMixin:
         """Sleep in short steps so a stop takes effect at once."""
         end = time.time() + seconds
         while time.time() < end:
-            if self.control.terminate:
+            if self.control.terminate and not getattr(self, "_homing", False):
                 raise ScriptTerminationException()
             time.sleep(min(0.25, max(0.0, end - time.time())))
 
@@ -473,6 +473,25 @@ class HumanMixin:
             return None
         return math.radians(deg)
 
+    def go_home_before_logout(self, why: str = "logging out") -> None:
+        """Walk back to the start spot before the character logs out (end of the run,
+        long break), so it always logs in where it works. Runs even after a stop."""
+        home = getattr(self, "_home_tile", None)
+        if not home:
+            return
+        self._homing = True
+        try:
+            cur = self.my_tile()
+            if not cur or math.hypot(home[0] - cur[0], home[1] - cur[1]) <= 2:
+                return
+            self.log.info(f"Back to the start spot before {why}: {home[0]}, {home[1]}")
+            self.set_activity("walking")
+            self.walk_to_tile(home, tol=1.5, label="the start spot")
+        except Exception:
+            self.log.warning("Couldn't walk back before logging out", exc_info=True)
+        finally:
+            self._homing = False
+
     def minimap_centre(self) -> tuple[float, float]:
         """Where the character is on the minimap (window coords), from the world-map orb."""
         from core.position import MINIMAP_FROM_GLOBE
@@ -490,7 +509,7 @@ class HumanMixin:
         mm = self.client.minimap.map
         rad_px = min(mm.width, mm.height) / 2 - 14
         for i in range(max_clicks):
-            if self.terminate:
+            if self.terminate and not getattr(self, "_homing", False):
                 return False
             sc = self.client.get_screenshot()
             cur = self.my_tile(sc)

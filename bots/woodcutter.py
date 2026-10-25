@@ -11,6 +11,7 @@ from core.osrs_client import ToolplaneTab
 from core.control import ScriptControl, ScriptTerminationException
 
 from PIL import Image
+import math
 import random
 import time
 import pyautogui
@@ -114,7 +115,10 @@ class BotConfig(BotConfigMixin):
     fire_moves: IntParam = IntParam(3)                 # moves to another spot before giving up on a log
     fire_move_tiles: RangeParam = RangeParam(1, 1)      # can't light here: step this far (1 tile is enough)
     fire_click_gap: RangeParam = RangeParam(0.15, 0.45)  # between tinderbox and log click
-    fire_step_wait: RangeParam = RangeParam(0.7, 1.3)    # after a fire: the character steps aside
+    fire_step_wait: RangeParam = RangeParam(0.3, 0.8)    # after a fire: a short look before the next log
+    fire_tile: StringParam = StringParam("")           # "x,y" where the fire lines start (empty = learnt from the first fires)
+    fire_lane_tiles: IntParam = IntParam(12)           # a line of fires this long: back to the fire spot, one row over
+    xp_drop_match: FloatParam = FloatParam(0.75)       # firemaking XP drop icon match (= the fire is lit)
     bank_tile: RGBParam = RGBParam(0, 255, 0)  # Green by default, only used when banking
     bank_to_trees: RouteParam = RouteParam([
         # WaypointParam(3094, 3244, 0, 790933, 8),
@@ -516,58 +520,83 @@ class BotExecutor(HumanMixin, Bot):
         time.sleep(random.uniform(0.05, 0.11))
         return self._selected(slot)
 
-    def _use_tinderbox_on(self, tinder: MatchResult, log: MatchResult, careful: bool = False) -> bool:
-        """Tinderbox, then the log. Every step is checked on the screen: after the tinderbox
-        click it must have the white "selected" outline, otherwise it is clicked again.
-        Quick clicks (skip_hover_chance) skip the mouse-over read, normal ones read it
-        first; never when `careful`. No double clicks: a second click would undo the select."""
-        from core.input.mouse_control import press
+    def _wait_selected(self, slot: MatchResult, want: bool, timeout: float) -> bool:
+        """Poll until the slot's white "selected" outline is there (want=True) or gone."""
+        end = time.time() + timeout
+        while True:
+            if self._selected(slot) == want:
+                return True
+            if time.time() >= end:
+                return False
+            time.sleep(random.uniform(0.06, 0.1))
+
+    def _light(self, tinder: MatchResult, log: MatchResult) -> str:
+        """Tinderbox, then the log - every step checked on the screen, no mouse-over OCR
+        (it read "Use Tinderbox -> Oak logs" as 'hl', '_', '' and kept the bot stuck).
+          tinderbox click -> its white outline must show (else click it again, 3 tries)
+          log click       -> the log leaves its slot = the game put it on the ground
+        Returns 'started', 'cant' (chat: no fire on this tile) or 'missed'."""
         sc = self.client.get_screenshot()
-        # leftover selection from an earlier try
-        if self._selected(tinder, sc):
-            self.log.debug("The tinderbox was still selected")
-        else:
+        log_slot = self.inv_slot(log)
+        if not self._selected(tinder, sc):
             sel_log = next((m for m in self._inv(self.cfg.log_type.name)
                             if self._selected(self.inv_slot(m), sc)), None)
             if sel_log is not None:
                 # a log is selected: clicking the tinderbox uses it on the log = lights it
                 self.log.debug("A log was selected: using it on the tinderbox")
+                log_slot = self.inv_slot(sel_log)
                 self.click_inv(tinder)
-                return True
-            selected = False
-            for i in range(2):
-                quick = not careful and i == 0 and random.random() < self.cfg.skip_hover_chance.value
-                if not quick:
-                    self.move_inv(tinder)
-                    time.sleep(random.uniform(0.06, 0.14))
-                    if not self._hover_has("tinderbox"):
-                        if self._inv(self.cfg.tinderbox.name):
-                            self._tinder = None  # it moved: look for it again
-                        return False
-                if self._press_and_check(tinder, quick):
-                    selected = True
+                return "started" if self._wait_gone(log_slot, 1.2) else "missed"
+            for i in range(3):
+                self.click_inv(tinder)
+                if self._wait_selected(tinder, True, 0.6):
                     break
-                self.log.info("The tinderbox click didn't select it: clicking it again")
-            if not selected:
-                return False
+                self.log.info(f"The tinderbox didn't get selected: clicking it again ({i + 1}/3)")
+            else:
+                self._tinder = None  # maybe it isn't where we think: look again
+                return "missed"
         time.sleep(self.cfg.fire_click_gap.choose())
-        quick = not careful and random.random() < self.cfg.skip_hover_chance.value
-        if quick:
-            self.click_inv(log)
-        else:
-            self.move_inv(log)
-            time.sleep(random.uniform(0.06, 0.14))
-            # "Use Tinderbox -> Logs": OCR often keeps only a part, any mention of logs will do
-            if not self._hover_has("log"):
-                self.click_inv(tinder)  # put the tinderbox down, try again
-                return False
-            press()
-        time.sleep(random.uniform(0.05, 0.11))
+        try:
+            chat_before = self._chat_box()
+        except Exception:
+            chat_before = None
+        for i in range(2):
+            self.click_inv(log_slot)
+            if self._wait_gone(log_slot, 1.0, while_selected=tinder):
+                return "started"
+            if self._selected(tinder):
+                self.log.info("The log click didn't land (tinderbox still selected): clicking it again")
+                continue
+            break
+        # the tinderbox let go but the log is still here: the tile doesn't allow a fire
+        # (the chat says so), or the click went elsewhere
+        if self._wait_gone(log_slot, 0.6):
+            return "started"
+        try:
+            ev, _ = self._chat_event(chat_before)
+        except Exception:
+            ev = None
+        if ev == "cant":
+            self.log.info("Chat: can't light a fire here")
+            return "cant"
         if self._selected(tinder):
-            # the log click didn't land: still selected - one more go at the log
-            self.log.info("The log click didn't land: clicking the log again")
-            self.click_inv(log)
-        return True
+            self.click_inv(tinder)  # put it down for a clean next try
+        return "missed"
+
+    def _wait_gone(self, slot: MatchResult, timeout: float, while_selected: MatchResult | None = None) -> bool:
+        """Poll until the slot is empty. With `while_selected`, give up early once that
+        item is no longer selected (the click was used up without lighting)."""
+        end = time.time() + timeout
+        unselected_at = None
+        while time.time() < end:
+            time.sleep(random.uniform(0.08, 0.13))
+            if self._slot_empty(slot):
+                return True
+            if while_selected is not None and not self._selected(while_selected):
+                unselected_at = unselected_at or time.time()
+                if time.time() - unselected_at > 0.4:
+                    return False
+        return False
 
     def _slot_empty(self, slot: MatchResult) -> bool:
         used = inventory.used_slots(self.client.get_screenshot())
@@ -659,64 +688,128 @@ class BotExecutor(HumanMixin, Bot):
             return "lighting", now
         return None, now
 
-    def _wait_lit(self, slot: MatchResult, chat_before=None) -> str:
-        """After the log click. The game puts the log on the ground at once - its slot is
-        empty long before the fire burns - and the character kneels until the fire catches,
-        then steps off it (one tile). Clicking anything before that stops the lighting.
-        Signals: the chat ("You can't light a fire here." / "You attempt to light the logs." /
-        "The fire catches..."), the log leaving its slot, the minimap moving (the step).
-        Returns 'lit', 'cant' (chat: no fire possible on this tile), 'blocked' (nothing
-        happened - usually a missed click) or 'failed'."""
-        from core.camera import GAME_VIEW
-        # the mouse off the inventory (natural, and the cursor hid the log)
-        x1, y1, x2, y2 = GAME_VIEW
-        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))
-        t0 = time.time()
-        started = False
-        ref = None
-        tabbed = False
-        chat = chat_before
-        while not self.terminate:
-            elapsed = time.time() - t0
-            limit = self.cfg.fire_timeout_max.value if started else self.cfg.fire_timeout.value
-            if elapsed > limit:
+    # ------------------------------------------------------------ "the fire is lit" signals
+    def _xp_drops(self, sc=None) -> list[int]:
+        """y of every firemaking XP drop (flame icon) rising on the right of the game view.
+        A drop shows ~2 s and moves up ~65 px/s; the XP bar's icon at the top is skipped."""
+        import cv2
+        import numpy as np
+        if getattr(self, "_xp_tpl", None) is None:
+            self._xp_tpl = cv2.cvtColor(np.asarray(Image.open("data/ui/xp-drop-firemaking.png").convert("RGB")),
+                                        cv2.COLOR_RGB2GRAY).astype(np.float32)
+        sc = sc or self.client.get_screenshot()
+        x1, y1, x2, y2 = self.XP_DROP_AREA
+        a = cv2.cvtColor(np.asarray(sc.convert("RGB").crop((x1, y1, x2, y2))), cv2.COLOR_RGB2GRAY).astype(np.float32)
+        r = cv2.matchTemplate(a, self._xp_tpl, cv2.TM_CCOEFF_NORMED)
+        ys = []
+        thr = float(self.cfg.xp_drop_match.value)
+        while True:
+            _, mx, _, (lx, ly) = cv2.minMaxLoc(r)
+            if mx < thr or len(ys) >= 4:
                 break
-            time.sleep(random.uniform(0.25, 0.45))
-            try:
-                ev, chat = self._chat_event(chat)
-            except Exception:
-                ev = None
-                self.log.debug("chat check failed", exc_info=True)
-            if ev == "cant":
-                self.log.info(f"Chat: can't light a fire here ({time.time() - t0:.1f}s after the click)")
-                return "cant"
-            if ev == "caught":
-                self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (chat)")
+            ys.append(y1 + ly)
+            r[max(0, ly - 12):ly + 12, :] = -1  # next drop (they're ~25 px apart at least)
+        return ys
+
+    XP_DROP_AREA = (420, 35, 545, 330)  # window coords: right part of the game view, under the XP bar
+
+    def _new_drop(self, before: list[int], sc=None) -> bool:
+        """A drop that wasn't there before: lower on the screen than every old one (new
+        drops start at the bottom and rise)."""
+        now = self._xp_drops(sc)
+        if not now:
+            return False
+        if not before:
+            return True
+        return max(now) > max(before) + 10
+
+    def _wait_fire(self, drops_before: list[int]) -> str:
+        """The log is on the ground and the character kneels. Clicking anything now stops
+        it. Lit = a firemaking XP drop appears, or the character steps off the fire (its
+        tile changes / the minimap moves). Returns 'lit' or 'failed'."""
+        from core.camera import GAME_VIEW
+        x1, y1, x2, y2 = GAME_VIEW
+        self.client.move_to((random.randint(x1, x2), random.randint(y1, y2)))  # off the inventory
+        t0 = time.time()
+        tile0 = self.my_tile()
+        ref = self._minimap_gray()
+        tabbed = False
+        while not self.terminate and time.time() - t0 < self.cfg.fire_timeout_max.value:
+            time.sleep(random.uniform(0.2, 0.35))
+            sc = self.client.get_screenshot()
+            if self._new_drop(drops_before, sc):
+                self.log.debug(f"Fire lit after {time.time() - t0:.1f}s (XP drop)")
                 return "lit"
-            if not started:
-                if ev == "lighting" or self._slot_empty(slot):
-                    started = True
-                    ref = self._minimap_gray()
-                    self.log.debug(f"Lighting started ({time.time() - t0:.1f}s after the click)")
-                continue
-            px, diff = self._shift(ref, self._minimap_gray())
-            if px >= self.cfg.fire_step_px.value or diff >= self.cfg.fire_step_diff.value:
-                self.log.debug(f"Fire caught after {time.time() - t0:.1f}s (stepped off: minimap {px:.1f}px, diff {diff:.0f})")
+            t = self.my_tile(sc)
+            if tile0 and t and t[:2] != tile0[:2]:
+                self.log.debug(f"Fire lit after {time.time() - t0:.1f}s (stepped {tile0[:2]} -> {t[:2]})")
                 return "lit"
-            if not tabbed and elapsed >= random.uniform(1.0, 2.0):
+            if not tile0:
+                px, diff = self._shift(ref, self._minimap_gray())
+                if px >= self.cfg.fire_step_px.value or diff >= self.cfg.fire_step_diff.value:
+                    self.log.debug(f"Fire lit after {time.time() - t0:.1f}s (minimap {px:.1f}px)")
+                    return "lit"
+            if not tabbed and time.time() - t0 >= random.uniform(1.0, 2.0):
                 tabbed = True
                 if self.maybe_alt_tab(lambda: not self._stepped(ref), "fire lighting"):
-                    chat = None  # the chat may have changed meanwhile: don't read old news
-                    continue
-        if not started:
-            return "blocked"  # nothing happened: usually the click missed
+                    drops_before = []  # an XP drop seen now may be ours; the tile check decides
+                    t = self.my_tile()
+                    if tile0 and t and t[:2] != tile0[:2]:
+                        return "lit"
         self.log.debug(f"No fire after {time.time() - t0:.0f}s")
         return "failed"
 
+    # ------------------------------------------------------------ where the fires go
+    def _parse_tile(self, text) -> tuple[int, int] | None:
+        txt = str(text or "").replace(" ", "")
+        if not txt:
+            return None
+        try:
+            x, y = (int(v) for v in txt.split(",")[:2])
+            return x, y
+        except ValueError:
+            self.log.warning(f"Tile setting '{txt}' is not 'x,y': ignored")
+            return None
+
+    def _fire_lane_start(self):
+        """Where the next line of fires starts: the fire spot, one row further each time."""
+        fx, fy = self._fire_spot
+        rows = (0, 1, -1, 2, -2)
+        dy = rows[self._fire_row % len(rows)]
+        return fx, fy + dy, 0
+
+    def _to_fire_spot(self, why: str) -> None:
+        if not getattr(self, "_fire_spot", None):
+            return
+        target = self._fire_lane_start()
+        cur = self.my_tile()
+        if cur and abs(cur[0] - target[0]) <= 1 and abs(cur[1] - target[1]) <= 0:
+            return
+        self.log.info(f"To the fire spot ({why}): {target[0]}, {target[1]}")
+        prev = self.activity
+        self.set_activity("walking")
+        try:
+            self.walk_to_tile(target, tol=0.5, label="the fire spot")
+        finally:
+            self.set_activity(prev or "firemaking")
+
     def burn_logs(self) -> int:
-        """Light every log in the inventory, one after another."""
+        """Light every log in the inventory, one after another, in lines starting at the
+        fire spot (a `fire_tile` setting, or the tile where the first fires of the run lit
+        fine). Each fire moves the character one tile; after `fire_lane_tiles` it walks
+        back to the fire spot one row over."""
         name = self.cfg.log_type.name
         burned = 0
+        if not hasattr(self, "_fire_spot"):
+            self._fire_spot = self._parse_tile(self.cfg.fire_tile.value)
+            self._fire_row = 0
+            if self._fire_spot:
+                self.log.info(f"Fire spot from the settings: {self._fire_spot}")
+        self.set_activity("firemaking")
+        self._to_fire_spot("inventory full")
+        lane_start = self.my_tile()
+        clean_streak = 0   # fires lit in a row without a step aside (to learn a fire spot)
+        streak_start = None
         for _ in range(28):
             if self.terminate:
                 break
@@ -731,66 +824,74 @@ class BotExecutor(HumanMixin, Bot):
                     return burned
                 self._tinder = self.inv_slot(found[0])
                 self.log.info(f"Tinderbox in inventory slot at {self._tinder.bounding_box[:2]}")
-            tinder = [self._tinder]
             self.set_activity("firemaking")
-            # each fire moves the character a tile: don't let the line of fires lead it away
-            self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
+            # a long line: back to the fire spot, next row
+            cur = self.my_tile()
+            if self._fire_spot and cur and lane_start and \
+                    math.hypot(cur[0] - lane_start[0], cur[1] - lane_start[1]) >= self.cfg.fire_lane_tiles.value:
+                self._fire_row += 1
+                self._to_fire_spot("end of the line")
+                lane_start = self.my_tile()
+            elif not self._fire_spot:
+                # no fire spot yet: don't let the line of fires lead it far from the trees
+                self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
             lit = False
             moves = 0
-            careful = False
-            for attempt in range(4 + int(self.cfg.fire_moves.value)):
-                if self.terminate:
-                    break
+            misses = 0
+            here = self.my_tile()  # the tile this log is lit from (before any step aside)
+            while not self.terminate:
                 log = random.choice(logs[:3])  # not always the first one
-                try:
-                    chat_before = self._chat_box()
-                except Exception:
-                    chat_before = None
-                if not self._use_tinderbox_on(tinder[0], log, careful):
-                    self.log.debug("Tinderbox/log mouse-over didn't match; trying again")
-                    time.sleep(random.uniform(0.3, 0.7))
-                    logs = self._inv(name) or logs
-                    continue
-                self.micro_idle()
-                t_fire = time.time()
-                res = self._wait_lit(self.inv_slot(log), chat_before)
-                if res == "lit":
-                    lit = True
-                    self.log.debug(f"Lit after {time.time() - t_fire:.1f}s")
-                    break
-                if res == "failed":
+                drops = self._xp_drops()
+                res = self._light(self._tinder, log)
+                if res == "started":
+                    self.micro_idle()
+                    t_fire = time.time()
+                    if self._wait_fire(drops) == "lit":
+                        lit = True
+                        self.log.debug(f"Lit after {time.time() - t_fire:.1f}s")
+                        break
                     logs = self._inv(name)
                     if not logs:
                         break  # the log lies on the ground unlit; nothing left to light
                     self.log.info("No fire: using the tinderbox again")
                     continue
-                # blocked: nothing happened. Often a quick click just missed (the log got
-                # selected instead): first try again right here, reading the mouse-over.
-                if res == "blocked" and not careful:
-                    careful = True
-                    self.log.info("Lighting didn't start: trying again here (mouse-over checked)")
-                    logs = self._inv(name) or logs
-                    continue
-                careful = False
-                # a fire is already here / the tile doesn't allow one: one step aside
+                if res == "missed":
+                    misses += 1
+                    if misses <= 3:
+                        time.sleep(random.uniform(0.3, 0.7))
+                        logs = self._inv(name) or logs
+                        continue
+                    misses = 0  # missed 3 times here: maybe the tile is the problem
+                # 'cant' (or many misses): a fire / object is on this tile: one step aside
                 if moves >= int(self.cfg.fire_moves.value):
                     break
                 moves += 1
+                clean_streak = 0
                 self.log.info(f"Can't light a fire here: one step aside "
                               f"({moves}/{int(self.cfg.fire_moves.value)})")
                 self.set_activity("walking")
                 self.step_aside()
                 self.set_activity("firemaking")
+                here = self.my_tile()
                 logs = self._inv(name) or logs
             if not lit:
                 self.log.warning("Gave up lighting this log")
                 self._tinder = None  # check where the tinderbox is next time
                 break
             burned += 1
+            clean_streak = clean_streak + 1 if moves == 0 else 1
+            if clean_streak == 1:
+                streak_start = here
             self.count("burned")
             self.log.info(f"Fire lit ({self.counts.get('burned', 0)} so far)")
-            time.sleep(self.cfg.fire_step_wait.choose())  # the character steps off the fire
+            if not self._fire_spot and clean_streak >= 3 and streak_start:
+                # three fires in a row lit fine from there: that's the fire spot
+                self._fire_spot = (streak_start[0], streak_start[1])
+                self._fire_row = 0
+                self.log.info(f"Fire spot learnt: {self._fire_spot} (3 fires in a row lit from there)")
+            time.sleep(self.cfg.fire_step_wait.choose())
             self.control.propose_break()
+        self._fire_row += 1  # next inventory: the next row (old fires may still burn)
         self._last_used = None
         self.set_activity("working")
         return burned

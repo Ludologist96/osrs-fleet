@@ -30,7 +30,7 @@ class Bot:
         self.control.long_break_config = long_break_cfg
         self.control.after_long_break = self._log_back_in
         # ...and log out when it starts (a player who stops for half an hour logs out).
-        self.control.before_long_break = self._log_out
+        self.control.before_long_break = self._long_break_logout
         # Some short breaks: look through skills/quests/equipment... tabs, then back.
         self.control.on_short_break = self._browse_tabs
         self.control.on_short_break_chance = float(break_ui_browse_chance)
@@ -123,6 +123,13 @@ class Bot:
                     return
         raise RuntimeError("couldn't log out")
 
+    def _long_break_logout(self):
+        """Long break: back to the start spot first (bots with a home), then log out."""
+        home = getattr(self, "go_home_before_logout", None)
+        if home:
+            home("the long break")
+        self._log_out()
+
     def logout_after_stop(self):
         """Called by the bot manager after a stopped bot's loop has ended. Clicks normally
         refuse to run once terminate is set, so let them through for the logout."""
@@ -133,6 +140,9 @@ class Bot:
         try:
             if login.state().get("state") != "game":
                 return
+            home = getattr(self, "go_home_before_logout", None)
+            if home:
+                home("logging out")
             self.log.info("Bot stopped: logging out")
             self._log_out()
         except Exception:

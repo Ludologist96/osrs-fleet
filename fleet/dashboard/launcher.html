@@ -403,7 +403,10 @@ const FORMS = {
       note: 'Banking walks the saved bank route (default: Draynor willows ↔ Draynor bank).' },
     { k: 'tree', label: 'Trees to cut', kind: 'tree' },
     { k: 'burn_logs', label: 'Firemaking: light the logs right away (tinderbox)', kind: 'bool' },
-    { k: 'home_max_tiles', label: 'Firemaking: walk back to the trees when more than N tiles away', kind: 'int' },
+    { k: 'home_max_tiles', label: 'Walk back to the trees when more than N tiles away', kind: 'int' },
+    { k: 'home_tile', label: 'Tree spot tile "x,y" (empty = where it starts)', kind: 'text', ph: '3166,3416',
+      note: 'The tile numbers are in the top-left corner of the game (World Location plugin). Logging out always walks back here first.' },
+    { k: 'fire_tile', label: 'Fire spot tile "x,y" (empty = learnt from the first fires)', kind: 'text', ph: '3170,3420' },
     { k: 'max_trees_before_forced_break', label: 'Short break after N trees without one (0 = off)', kind: 'int' },
   ],
   slayer: [
@@ -460,6 +463,8 @@ $('cfgopen').onclick = async () => {
       const sync = () => { txt.style.display = sel.value === 'items' ? '' : 'none'; }; sel.onchange = sync; sync();
       box.append(sel, txt); inp = box; inp.dataset.k = f.k; inp.dataset.kind = f.kind; }
     else if (f.kind === 'int') { inp = document.createElement('input'); inp.type = 'number'; inp.value = v(f.k); }
+    else if (f.kind === 'text') { inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = f.ph || '';
+      inp.value = v(f.k) || ''; }
     else { inp = document.createElement('input'); inp.type = 'number'; inp.step = '0.1'; inp.min = 0; inp.max = 100;
       inp.value = +(100 * (v(f.k) || 0)).toFixed(2); l.title = 'in %'; }
     inp.dataset.k = f.k; inp.dataset.kind = f.kind; l.appendChild(inp); body.appendChild(l);
@@ -478,6 +483,7 @@ $('cfgsave').onclick = async () => {
     else if (kind === 'lootlist') { const [sel, txt] = inp.children;
       out[k] = sel.value === 'none' ? [] : txt.value.split(',').map(x => x.trim()).filter(Boolean); }
     else if (kind === 'int') out[k] = Math.round(+inp.value || 0);
+    else if (kind === 'text') out[k] = inp.value.trim();
     else out[k] = Math.max(0, Math.min(1, (+inp.value || 0) / 100));
   }
   const lines = [];
