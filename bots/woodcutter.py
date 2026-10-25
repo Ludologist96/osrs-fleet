@@ -747,7 +747,9 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.debug(f"Fire lit after {time.time() - t0:.1f}s (XP drop)")
                 return "lit"
             t = self.my_tile(sc)
-            if tile0 and t and t[:2] != tile0[:2]:
+            if tile0 and t and t[:2] != tile0[:2] and time.time() - t0 < 1.2:
+                tile0 = t  # too soon for a fire: it was still walking - watch from here
+            elif tile0 and t and t[:2] != tile0[:2]:
                 self.log.debug(f"Fire lit after {time.time() - t0:.1f}s (stepped {tile0[:2]} -> {t[:2]})")
                 return "lit"
             if not tile0:
@@ -799,6 +801,36 @@ class BotExecutor(HumanMixin, Bot):
         finally:
             self.set_activity(prev or "firemaking")
 
+    def _settle(self, timeout: float = 4.0) -> None:
+        """Wait until the character stands still (a walk or step finished): a tile change
+        while it still walks would look like "the fire is lit"."""
+        t = self.my_tile()
+        if t:
+            self._wait_stopped(t, timeout)
+
+    def _scout_next(self) -> bool:
+        """No fire spot yet and the fire can't be lit here: walk to the next spot on open
+        ground around the trees (rings 4-9 tiles out, random order). False when every
+        candidate was tried."""
+        home = getattr(self, "_home_tile", None) or self.my_tile()
+        if not home:
+            return False
+        if getattr(self, "_scout", None) is None:
+            spots = []
+            for r in (4, 6, 8):
+                ring = [(home[0] + dx * r, home[1] + dy * r)
+                        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))]
+                random.shuffle(ring)
+                spots += ring
+            self._scout = spots
+        while self._scout:
+            tx, ty = self._scout.pop(0)
+            self.log.info(f"Looking for a fire spot: trying {tx}, {ty}")
+            if self.walk_to_tile((tx, ty, 0), tol=1.0, label="a possible fire spot", max_clicks=4):
+                return True
+        self.log.warning("No fire spot found around the trees")
+        return False
+
     def burn_logs(self) -> int:
         """Light every log in the inventory, one after another, in lines starting at the
         fire spot (a `fire_tile` setting, or the tile where the first fires of the run lit
@@ -813,6 +845,7 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.info(f"Fire spot from the settings: {self._fire_spot}")
         self.set_activity("firemaking")
         self._to_fire_spot("inventory full")
+        self._settle()
         lane_start = self.my_tile()
         clean_streak = 0   # fires lit in a row without a step aside (to learn a fire spot)
         streak_start = None
@@ -838,9 +871,6 @@ class BotExecutor(HumanMixin, Bot):
                 self._fire_row += 1
                 self._to_fire_spot("end of the line")
                 lane_start = self.my_tile()
-            elif not self._fire_spot:
-                # no fire spot yet: don't let the line of fires lead it far from the trees
-                self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
             lit = False
             moves = 0
             misses = 0
@@ -868,15 +898,28 @@ class BotExecutor(HumanMixin, Bot):
                         logs = self._inv(name) or logs
                         continue
                     misses = 0  # missed 3 times here: maybe the tile is the problem
-                # 'cant' (or many misses): a fire / object is on this tile: one step aside
-                if moves >= int(self.cfg.fire_moves.value):
-                    break
-                moves += 1
+                # 'cant' (or many misses): a fire / object is on this tile
                 clean_streak = 0
-                self.log.info(f"Can't light a fire here: one step aside "
-                              f"({moves}/{int(self.cfg.fire_moves.value)})")
                 self.set_activity("walking")
-                self.step_aside()
+                if not self._fire_spot:
+                    # no fire spot yet: try open ground around the trees, spot by spot
+                    if not self._scout_next():
+                        break
+                    moves = 0
+                elif moves < int(self.cfg.fire_moves.value):
+                    moves += 1
+                    self.log.info(f"Can't light a fire here: one step aside "
+                                  f"({moves}/{int(self.cfg.fire_moves.value)})")
+                    self.step_aside()
+                elif moves == int(self.cfg.fire_moves.value):
+                    moves += 1
+                    self._fire_row += 1
+                    self._to_fire_spot("blocked here")
+                    lane_start = self.my_tile()
+                else:
+                    self.set_activity("firemaking")
+                    break
+                self._settle()
                 self.set_activity("firemaking")
                 here = self.my_tile()
                 logs = self._inv(name) or logs
