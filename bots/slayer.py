@@ -25,7 +25,7 @@ Not yet: banking (a full inventory just stops picking up `loot_keep`), eating to
 from bots.core import BotConfigMixin
 from bots.core.cfg_types import (
     StringListParam, BooleanParam, IntParam, FloatParam, RGBParam, RGBListParam,
-    RangeParam, BreakCfgParam,
+    RangeParam, BreakCfgParam, StringParam,
 )
 from core.bot import Bot
 from core.camera import Camera
@@ -115,6 +115,7 @@ class BotConfig(BotConfigMixin):
     # --- stay in the start area ---
     return_home: BooleanParam = BooleanParam(True)  # walk back when it wandered off (chasing, loot)
     home_max_tiles: FloatParam = FloatParam(10.0)   # after a kill: farther than this -> walk back
+    home_tile: StringParam = StringParam("")        # set by the launcher when it restarts a run ("" = where it starts)
     home_idle_tiles: FloatParam = FloatParam(4.0)   # nothing to attack: farther than this -> walk back
     home_match: FloatParam = FloatParam(0.6)        # minimap match needed to find the start area
 
@@ -242,8 +243,13 @@ class BotExecutor(HumanMixin, Bot):
         self.set_activity("looking for a target")
         if self.cfg.return_home.value:
             try:
-                if self.remember_home():
-                    self.log.info("Remembered the minimap around the start area")
+                self.remember_home()
+                # a restarted run (the launcher passes its start area): walk back there first
+                if str(self.cfg.home_tile.value or "").strip():
+                    self.go_home(max_tiles=self.cfg.home_max_tiles.value)
+            except ScriptTerminationException:
+                self.log.info("Terminated while walking to the start area")
+                return
             except Exception:
                 self.log.warning("Couldn't remember the start area", exc_info=True)
         try:
