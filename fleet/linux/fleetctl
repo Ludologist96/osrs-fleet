@@ -81,13 +81,16 @@ cmd_update() {
     for n in $(seq 1 "$SLOTS"); do echo "slot$n: 127.0.0.1:$((5900 + n))"; done > /etc/osrs/vnc-tokens
     systemctl enable osrs-websockify.service >/dev/null 2>&1 || true
     systemctl restart osrs-websockify.service || true
-    echo "Restarting bot apps and dashboard (RuneLite clients keep running)"
+    echo "Restarting dashboard and bot apps (RuneLite clients keep running)"
+    # the dashboard first: its launcher then knows the bots it finds stopped were stopped
+    # by this update (not a crash) and starts them again without counting a restart
+    systemctl restart osrs-dashboard.service
+    sleep 3
     for n in $(seq 1 "$SLOTS"); do systemctl restart "osrs-app@$n.service"; done
     systemctl enable osrs-proxy-rules.service >/dev/null 2>&1 || true
     systemctl start --no-block osrs-proxy-rules.service || true
     systemctl enable osrs-telegram.service >/dev/null 2>&1 || true
     systemctl restart osrs-telegram.service || true
-    systemctl restart osrs-dashboard.service
     echo "Updated."
 }
 

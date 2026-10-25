@@ -310,6 +310,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(_app_http("GET", n, f"/api/bot/{m.group(2)}/config"))
             except Exception as e:
                 self._json({"error": str(e)}, 502)
+        elif m := re.fullmatch(r"/api/slot/(\d+)/session/([a-z_]+)", path):
+            # slot N's game session API (state, words on the screen...)
+            n = int(m.group(1))
+            if not 1 <= n <= SLOTS:
+                return self._json({"error": "bad slot"}, 400)
+            try:
+                self._json(_app_http("GET", n, f"/api/session/{m.group(2)}" + (f"?{query}" if query else ""), timeout=30))
+            except Exception as e:
+                self._json({"error": str(e)}, 502)
         elif m := re.fullmatch(r"/api/slot/(\d+)/world", path):
             # Which login world slot N's RuneLite is set to (Default World plugin).
             import glob
@@ -393,6 +402,16 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_POST(self):
+        if m := re.fullmatch(r"/api/slot/(\d+)/session/([a-z_]+)(?:\?(.*))?", self.path):
+            # slot N's session actions: login, click, key (a hand for setting an account up)
+            n = int(m.group(1))
+            if not 1 <= n <= SLOTS:
+                return self._json({"error": "bad slot"}, 400)
+            try:
+                return self._json(_app_http("POST", n, f"/api/session/{m.group(2)}" + (f"?{m.group(3)}" if m.group(3) else ""),
+                                            body={}, timeout=120))
+            except Exception as e:
+                return self._json({"error": str(e)}, 502)
         if self.path.startswith("/api/launch"):
             body = self._body()
             try:

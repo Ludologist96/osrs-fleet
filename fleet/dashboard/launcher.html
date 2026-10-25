@@ -557,6 +557,18 @@ function layout() {
     t.inner.style.width = SCREEN_W * s + 'px'; t.inner.style.height = SCREEN_H * s + 'px';
     t.inner.style.left = -c.x * s + 'px'; t.inner.style.top = -c.y * s + 'px';
   }
+  requestAnimationFrame(rescale);
+}
+
+// noVNC only rescales its picture when its box size differs from the size it had at
+// connect time: a box that shrank (a new account's screen joined) and then grew back
+// to that size kept the small picture - the "messed up window size" until a reload.
+// So rescale every screen ourselves after each layout (and every few seconds).
+function rescale() {
+  for (const n of shown) {
+    const t = tiles[n]; if (!t?.rfb) continue;
+    try { t.rfb.scaleViewport = true; } catch (e) {}
+  }
 }
 
 function connect(n) {
@@ -567,7 +579,7 @@ function connect(n) {
   rfb.scaleViewport = true; rfb.resizeSession = false; rfb.focusOnClick = true;
   rfb.addEventListener('disconnect', () => { if (t.closing || tiles[n] !== t) return;
     t.msg.textContent = 'reconnecting…'; t.msg.style.display = ''; setTimeout(() => connect(n), 3000); });
-  rfb.addEventListener('connect', () => { t.msg.style.display = 'none'; });
+  rfb.addEventListener('connect', () => { t.msg.style.display = 'none'; requestAnimationFrame(rescale); });
   t.rfb = rfb;
 }
 
@@ -581,6 +593,7 @@ refresh(); loadStats();
 setInterval(() => loadRuns().catch(() => {}), 1000);
 setInterval(() => loadAccounts().catch(() => {}), 10000);
 setInterval(loadGeom, 5000);
+setInterval(rescale, 3000);
 setInterval(loadStats, 10000);
 </script>
 </body>

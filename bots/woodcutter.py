@@ -302,8 +302,8 @@ class BotExecutor(HumanMixin, Bot):
                         self.mover.execute_route(self.cfg.bank_to_trees)
                         self.chop_tree()
                 
-                # Wait a bit before checking status again
-                time.sleep(self.cfg.inventory_check_delay.choose())
+                # Wait a bit before checking status again (looks sooner when the tree falls)
+                self._chop_wait()
                 
                 # Reset consecutive failures counter on successful cycle
                 self.consecutive_failures = 0
@@ -673,6 +673,26 @@ class BotExecutor(HumanMixin, Bot):
         self.log.debug("Chopping didn't start before the timeout")
         return False
 
+    def _chop_wait(self) -> None:
+        """Wait up to inventory_check_delay while it chops, glancing every ~0.6 s: when
+        chopping stops (tree down / inventory full) go on after a short reaction time
+        instead of sitting out the rest of the wait. Two "not chopping" looks in a row,
+        so a one-frame overlay flicker doesn't count."""
+        end = time.time() + self.cfg.inventory_check_delay.choose()
+        idle = 0
+        while not self.terminate:
+            left = end - time.time()
+            if left <= 0:
+                return
+            time.sleep(min(left, random.uniform(0.4, 0.75)))
+            if self.client.is_woodcutting:
+                idle = 0
+                continue
+            idle += 1
+            if idle >= 2:
+                time.sleep(random.uniform(0.1, 0.45))  # a player's reaction
+                return
+
     def _wiggle(self, near: tuple[int, int]) -> None:
         """Mouse a little away from the target and back (a player's hand isn't still)."""
         if random.random() >= self.cfg.pre_click_wiggle_chance.value:
@@ -687,11 +707,19 @@ class BotExecutor(HumanMixin, Bot):
         started. False = it didn't (walking, wrong spot, wrong tree): caller verifies."""
         pt = target.get_point_within()
         self._wiggle(pt)
+        tile0 = self.my_tile()
         self.quick_click(pt)
         self.log.debug(f"Clicked a tree without the mouse-over check at {pt}")
         time.sleep(self.cfg.skip_hover_check.choose())
         if self.client.is_woodcutting:
             return True
+        # still walking to that tree: wait for it (clicking other trees meanwhile - their
+        # boxes slide across the screen while it walks - only sent it back and forth)
+        t = self.my_tile()
+        if tile0 and t and t[:2] != tile0[:2]:
+            self.log.debug(f"Walking to the tree ({tile0[0]},{tile0[1]} -> {t[0]},{t[1]}): waiting")
+            if self._wait_for_chop_start():
+                return True
         return False
 
     def _after_click(self, target: MatchResult) -> None:
@@ -1089,9 +1117,23 @@ class BotExecutor(HumanMixin, Bot):
     def _settle(self, timeout: float = 4.0) -> None:
         """Wait until the character stands still (a walk or step finished): a tile change
         while it still walks would look like "the fire is lit"."""
-        t = self.my_tile()
-        if t:
-            self._wait_stopped(t, timeout)
+        # the same tile on three looks in a row (~1 s) = standing (the old way waited for 6
+        # looks, ~2 s, whenever it already stood still - most of the time between fires)
+        end = time.time() + timeout
+        last, same = self.my_tile(), 0
+        if last is None:
+            return
+        while time.time() < end and not self.terminate:
+            time.sleep(random.uniform(0.25, 0.35))
+            t = self.my_tile()
+            if t is None:
+                continue
+            if t == last:
+                same += 1
+                if same >= 3:
+                    return
+            else:
+                last, same = t, 0
 
     def _scout_next(self) -> bool:
         """No fire spot yet and the fire can't be lit here: walk to the next spot on open
@@ -1141,10 +1183,15 @@ class BotExecutor(HumanMixin, Bot):
         row_fires = 0      # fires lit on this line so far
         clean_streak = 0   # fires lit in a row without a step aside (to learn a fire spot)
         streak_start = None
+        logs = []
         for _ in range(28):
             if self.terminate:
                 break
-            logs = self._inv(name)
+            # the log slots: looked up once, then the lit ones are taken off the list (a
+            # full inventory search per log cost ~1 s); looked up again when it runs out
+            logs = [m for m in logs if not self._slot_empty(self.inv_slot(m))] if logs else self._inv(name)
+            if not logs:
+                logs = self._inv(name)
             if not logs:
                 break
             # the tinderbox stays in its slot: find it once per run
@@ -1226,6 +1273,9 @@ class BotExecutor(HumanMixin, Bot):
                 self.set_activity("firemaking")
                 here = self.my_tile()
                 logs = self._inv(name) or logs
+            if lit:
+                used = self.inv_slot(log)
+                logs = [m for m in logs if self.inv_slot(m).bounding_box != used.bounding_box]
             if not lit:
                 self.log.warning("Gave up lighting this log")
                 self._tinder = None  # check where the tinderbox is next time
@@ -1246,9 +1296,26 @@ class BotExecutor(HumanMixin, Bot):
                 lane_start, row_fires = streak_start, clean_streak
                 self.log.info(f"Fire spot learnt: {self._fire_spot} (5 fires in a line lit from there)")
             # the character steps off the fire now; a log click during that step is often
-            # ignored by the game (tinderbox stays selected): let it finish first
+            # ignored by the game (tinderbox stays selected): let it finish first. The
+            # tinderbox can be picked up meanwhile (selecting doesn't stop the step), and
+            # the short look (fire_step_wait) counts from the moment the fire lit.
+            t_lit = time.time()
+            lane_done = bool(self._fire_spot) and row_fires >= self._lane_len  # a walk comes next
+            if logs and not lane_done and random.random() < 0.85:
+                try:
+                    self.click_inv(self._tinder)
+                    if not self._wait_selected(self._tinder, True, 0.5):
+                        self.log.debug("Tinderbox not selected during the step: _light will retry")
+                except ScriptTerminationException:
+                    raise
+                except Exception:
+                    self.log.debug("tinderbox pre-select failed", exc_info=True)
             self._settle(3.0)
-            time.sleep(self.cfg.fire_step_wait.choose())
+            # at least ~2 s after the fire lit: log clicks sooner than that were often
+            # ignored by the game (1.1-1.5 s: every 2nd log click missed, ~3 s lost each)
+            rest = max(self.cfg.fire_step_wait.choose(), random.uniform(1.8, 2.2)) - (time.time() - t_lit)
+            if rest > 0:
+                time.sleep(rest)
             self.control.propose_break()
         self._fire_row += 1  # next inventory: the next row (old fires may still burn)
         self._last_used = None

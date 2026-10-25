@@ -238,6 +238,9 @@ class Launcher:
         self.slots = slots
         self.runs: dict[str, dict] = {}
         self.last: dict[str, dict] = {}  # per slot: the bot + run time of its last launch
+        # the dashboard restarts with every code update (fleetctl update), right after the
+        # bot apps: bots found stopped in the first minutes were stopped by that update
+        self.started_at = time.time()
         self._load()
         threading.Thread(target=self._loop, daemon=True, name="launcher").start()
 
@@ -375,8 +378,10 @@ class Launcher:
                         # start it again a few times before giving up
                         # count only restarts close together (a crash loop), not one per update
                         restarts = r.get("restarts", 0) if now - r.get("last_restart", 0) < 900 else 0
-                        if restarts < 3:
-                            self._set(n, restarts=restarts + 1, last_restart=now, resuming=True,
+                        by_update = now - self.started_at < 240  # a code update, not a crash
+                        if by_update or restarts < 3:
+                            self._set(n, restarts=restarts if by_update else restarts + 1,
+                                      last_restart=r.get("last_restart", 0) if by_update else now, resuming=True,
                                       msg=f"bot stopped ({st}); restarting it")
                             threading.Thread(target=self._resume, args=(n, r["bot"]), daemon=True).start()
                         else:
