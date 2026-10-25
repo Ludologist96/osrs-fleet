@@ -501,8 +501,15 @@ class BotManagerService:
                     return {"status": "terminated", "activity": "stopping",
                             "counts": dict(getattr(self.current_bot.executor, "counts", {}) or {})}
 
+                ex = self.current_bot.executor
+                spots = {}  # where this run works (the launcher keeps them over bot restarts)
+                for key, attr in (("home", "_home_tile"), ("fire", "_fire_spot")):
+                    t = getattr(ex, attr, None)
+                    if t:
+                        spots[key] = f"{t[0]},{t[1]}"
                 return {
                     "status": "paused" if is_paused else "running",
+                    "spots": spots,
                     "activity": self.activity_of(self.current_bot.executor),
                     "counts": dict(getattr(self.current_bot.executor, "counts", {}) or {}),
                     "paused": is_paused,

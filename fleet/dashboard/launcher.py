@@ -103,6 +103,15 @@ def read_rl_settings(n: int) -> dict:
     return out
 
 
+def _set_spots(cfg: dict, spots: dict) -> None:
+    """Put a run's remembered tiles into the bot config it is started with (empty = the
+    bot takes the tile where it stands). Saved settings are not changed."""
+    for key, field in (("home", "home_tile"), ("fire", "fire_tile")):
+        f = cfg.get(field)
+        if isinstance(f, dict) and "value" in f:
+            f["value"] = spots.get(key, "")
+
+
 def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
     """RuneLite settings a bot needs, made from its saved config (so its targets/loot
     are set in one place: the bot's settings)."""
@@ -449,6 +458,9 @@ class Launcher:
                 return
             self._set(n, msg=f"starting {bot}")
             cfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")
+            # a new run: the start area is wherever the character stands now
+            _set_spots(cfg, {})
+            self._set(n, spots={})
             res = _http("POST", f"{_app(n)}/api/bot/{bot}/start", {"config": cfg}, timeout=60)
             if not res.get("success"):
                 raise RuntimeError(f"bot didn't start: {res.get('error')}")
@@ -468,6 +480,9 @@ class Launcher:
         try:
             self._login(n, "couldn't get back into the game")
             cfg = _http("GET", f"{_app(n)}/api/bot/{bot}/config")
+            # a restart (update / crash) in the middle of a run: keep the run's start area
+            # and fire spot (the bot walks back there first)
+            _set_spots(cfg, (self.runs.get(str(n)) or {}).get("spots") or {})
             res = _http("POST", f"{_app(n)}/api/bot/{bot}/start", {"config": cfg}, timeout=60)
             if not res.get("success"):
                 raise RuntimeError(f"bot didn't start: {res.get('error')}")
@@ -498,6 +513,10 @@ class Launcher:
                 return
             if info.get("activity"):
                 r["activity_now"] = info["activity"]
+            sp = info.get("spots")
+            if isinstance(sp, dict) and sp and sp != r.get("spots"):
+                r["spots"] = sp  # where this run started / lights fires: kept for restarts
+                self._save()
             c = info.get("counts")
             if isinstance(c, dict) and c != r.get("counts_raw"):
                 raw = r.get("counts_raw") or {}
