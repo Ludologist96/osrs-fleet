@@ -203,7 +203,8 @@ class BotExecutor(HumanMixin, Bot):
             if str(self.cfg.home_tile.value or "").strip():
                 self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
         except ScriptTerminationException:
-            raise
+            self.log.info("Terminated while walking to the trees")
+            return
         except Exception:
             self.log.warning("Couldn't remember the tree area yet", exc_info=True)
         
