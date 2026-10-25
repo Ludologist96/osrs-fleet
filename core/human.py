@@ -366,7 +366,12 @@ class HumanMixin:
         Too far for one minimap click: click the minimap edge that way (look again later)."""
         home = getattr(self, "_home_tile", None)
         if home:
-            cur = self.my_tile()
+            cur = None
+            for _ in range(3):  # a menu / the mouse can hide the panel for a moment
+                cur = self.my_tile()
+                if cur:
+                    break
+                time.sleep(random.uniform(0.25, 0.45))
             if cur:
                 dist = math.hypot(home[0] - cur[0], home[1] - cur[1])
                 if dist <= max(1.0, max_tiles):
@@ -383,7 +388,9 @@ class HumanMixin:
                     self.log.warning(f"Couldn't get back to {label} (still "
                                      f"{self._tile_dist(home):.0f} tiles away)")
                 return True
-            self.log.debug("Tile not readable: walking back by the minimap picture")
+            # the minimap-picture fallback finds fake homes in forests: better wait
+            self.log.debug("Tile not readable right now: not walking back this time")
+            return False
         found = self.find_home(rotations)
         if not found:
             return False

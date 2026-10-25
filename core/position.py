@@ -32,7 +32,7 @@ _GLYPHS = {
 _TPL = {ch: np.array([[c == '#' for c in row] for row in s.split('/')], dtype=bool)
         for ch, s in _GLYPHS.items()}
 
-SEARCH = (0, 0, 360, 230)  # window area where the top-left overlays sit
+SEARCH = (0, 0, 420, 330)  # window area where the top-left overlays sit (they stack)
 WHITE_MIN = 200            # text pixels: every channel >= this (shadow is black)
 WORD_GAP = 10              # px: the label and the numbers are ~25 px apart, digits 1-5
 
