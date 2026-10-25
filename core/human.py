@@ -465,6 +465,12 @@ class HumanMixin:
             return None
         return math.radians(deg)
 
+    def minimap_centre(self) -> tuple[float, float]:
+        """Where the character is on the minimap (window coords), from the world-map orb."""
+        from core.position import MINIMAP_FROM_GLOBE
+        g = self.client.minimap.globe
+        return g.start_x + MINIMAP_FROM_GLOBE[0], g.start_y + MINIMAP_FROM_GLOBE[1]
+
     def walk_to_tile(self, target, tol: float = 1.5, label: str = "the target",
                      max_clicks: int = 14) -> bool:
         """Walk to a world tile with minimap clicks. True when within `tol` tiles.
@@ -500,10 +506,11 @@ class HumanMixin:
                 ang += math.radians(random.choice((-1, 1)) * random.uniform(35, 75))
                 step = min(step, random.uniform(4, 7))
             step = max(1.0, step + random.uniform(-0.4, 0.3))
-            cx, cy = self.player_dot(sc)
+            cx, cy = self.minimap_centre()
             pt = (int(round(cx + step * ppt * math.cos(ang) + random.uniform(-1, 1))),
                   int(round(cy + step * ppt * math.sin(ang) + random.uniform(-1, 1))))
             self.client.click(pt)
+            self.log.debug(f"Walk click at {pt} (minimap centre {cx:.1f},{cy:.1f}, {ppt:.2f} px/tile)")
             end = self._wait_stopped(cur, timeout=3.0 + step * 0.7)
             mx, my = end[0] - cur[0], end[1] - cur[1]
             moved = math.hypot(mx, my)
