@@ -187,6 +187,20 @@ def runs() -> dict:
     return dash("/api/launch")["runs"]
 
 
+def accounts_last(slots_: list[int]) -> dict:
+    """What these accounts ran last (the launcher keeps it per account): {bot, minutes}
+    when they all ran the same bot, else {} (then the phone's own last choice is used)."""
+    try:
+        last_ = dash("/api/launch").get("last") or {}
+    except Exception:
+        return {}
+    prev = [last_.get(str(n)) for n in slots_]
+    if not prev or any(not p for p in prev) or len({p["bot"] for p in prev}) != 1:
+        return {}
+    mins = {p.get("minutes") for p in prev}
+    return {"bot": prev[0]["bot"], "minutes": mins.pop() if len(mins) == 1 else None}
+
+
 def bots() -> list[dict]:
     return [b for b in dash("/api/bots")["bots"] if b["id"] != "freeroam"]
 
@@ -522,10 +536,11 @@ def wiz_ask(note: str = ""):
                 kb(rows, back=False))
     if step == "bot":
         names = [b["name"] if len(b["name"]) <= 28 else b["id"] for b in w["bots"]]
-        keep = next((b["name"] for b in w["bots"] if b["id"] == last("bot")), None)
+        prev_bot = (w.get("prev") or {}).get("bot") or last("bot")
+        keep = next((b["name"] for b in w["bots"] if b["id"] == prev_bot), None)
         return pre + "Which bot?", kb(chunks(names, 2), keep)
     if step == "time":
-        lm = last("minutes")
+        lm = w.get("keep_min")
         return (pre + "Run for how long? (or type e.g. 90, 1h30, 2.5h)",
                 kb(chunks(list(TIME_BUTTONS), 3), fmt_min(lm) if lm else None))
     if step == "spread":
@@ -561,6 +576,8 @@ def wiz_answer(t: str) -> str:
             if not w["sel"]:
                 return "Pick at least one account."
             a["slots"] = sorted(w["sel"])
+            # offer what these accounts ran last (their settings are kept per account+bot)
+            w["prev"] = accounts_last(a["slots"])
             return ""
         if m := re.match(r"(?:✅ )?(\d+) · ", t):
             n = int(m.group(1))
@@ -580,11 +597,14 @@ def wiz_answer(t: str) -> str:
         for b in w["bots"]:
             if t in (b["name"], b["id"]) or t.lower() == b["name"].lower():
                 a["bot"], a["bot_name"] = b["id"], b["name"]
+                # run time to offer: these accounts' last one when they ran this bot
+                prev = w.get("prev") or {}
+                w["keep_min"] = (prev.get("minutes") if prev.get("bot") == b["id"] else None) or last("minutes")
                 return ""
         return "Pick a bot from the buttons."
     if step == "time":
         if t.startswith(KEEP):
-            mins = last("minutes")
+            mins = w.get("keep_min") or last("minutes")
         else:
             mins = TIME_BUTTONS.get(t) or parse_minutes(t)
         if not mins or mins <= 0 or mins > 24 * 60:
