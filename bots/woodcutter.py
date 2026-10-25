@@ -408,11 +408,16 @@ class BotExecutor(HumanMixin, Bot):
         `words`. Leaves the menu (closing it) when nothing matches."""
         from core import ocr
         from core.input.mouse_control import click
-        sc = self.client.get_screenshot()
-        try:
-            menu = self.client.get_right_click_menu(sc)
-        except Exception as e:
-            self.log.debug(f"No right-click menu: {e}")
+        menu = None
+        for _ in range(3):  # the menu can take a frame or two to show
+            sc = self.client.get_screenshot()
+            try:
+                menu = self.client.get_right_click_menu(sc)
+                break
+            except Exception as e:
+                self.log.debug(f"No right-click menu yet: {e}")
+                time.sleep(random.uniform(0.15, 0.25))
+        if menu is None:
             return False
         header, line = 19, 15
         n = max(1, round((menu.height - header) / line))
