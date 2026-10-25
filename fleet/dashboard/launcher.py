@@ -113,7 +113,10 @@ def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
            "runelite.worldlocationplugin": "true", "worldlocation.gridInfo": "true",
            "worldlocation.gridInfoType": "UNIQUE_ID",
            # no coordinates line in the mouse-over tooltip (the hover-text readers OCR it)
-           "worldlocation.tileLocation": "false"}
+           "worldlocation.tileLocation": "false",
+           # minimap at a known zoom: walking clicks it at 4 px per tile (slot 8 had 2.0
+           # and every walk went twice as far as wanted)
+           "minimap.zoom": "true", "minimap.zoomLevel": "4.0"}
     if bot not in ("slayer", "woodcutter"):
         return {}
     if bot != "slayer":

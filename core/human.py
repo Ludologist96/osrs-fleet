@@ -470,7 +470,8 @@ class HumanMixin:
         """Walk to a world tile with minimap clicks. True when within `tol` tiles.
         Each click: read the tile (World Location panel) and the camera turn (compass),
         click the minimap toward the target, wait until the character stands still."""
-        ppt = getattr(self, "_mm_ppt", self.MINIMAP_PX_PER_TILE)
+        # minimap px per tile = RuneLite's minimap zoom (the launcher sets 4.0); refined below
+        ppt = getattr(self, "_mm_ppt", float(_v(self.cfg, "minimap_px_per_tile", 4.0)))
         stuck = 0
         mm = self.client.minimap.map
         rad_px = min(mm.width, mm.height) / 2 - 14
