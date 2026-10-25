@@ -466,7 +466,9 @@ class BotExecutor(HumanMixin, Bot):
             except Exception:
                 text = ""
             seen.append(text)
-            if any(w in text for w in words) and "talk" not in text:
+            # the action is the line's first word ("Bank Banker", "Bank Bank booth"; not
+            # "Examine Closed bank booth")
+            if any(text.startswith(w) or (w.startswith("-") and w in text.split(" ")[0]) for w in words):
                 target = MatchResult(row.start_x + 4, y + 3, min(row.end_x - 4, row.start_x + 60), y + line - 3)
                 self.client.move_to(target.get_point_within(), rand_move_chance=0)
                 click(-1, -1)
@@ -506,39 +508,30 @@ class BotExecutor(HumanMixin, Bot):
             self.log.info("The bank didn't open")
         return False
 
-    def _deposit_all_but_keep(self) -> int:
-        """Click every inventory item that isn't a keep item (axe, tinderbox) with the
-        bank's quantity on "All": one click deposits all of that kind. Returns the clicks."""
+    def _deposit_all_but_keep(self, keep_slots: set) -> int:
+        """Click every inventory slot that isn't a keep item (axe, tinderbox - `keep_slots`,
+        read before the bank opened; deposits leave gaps, nothing moves) with the bank's
+        quantity on "All": one click deposits all of that kind. After each click the mouse
+        moves off the inventory (the cursor on a slot looks like an item - that made it
+        click empty slots for 20 s). Returns the clicks."""
+        from core.input.mouse_control import ClickType
         try:
             self.bank.set_quantity_setting("All")
-            time.sleep(random.uniform(0.3, 0.6))
+            time.sleep(random.uniform(0.2, 0.4))
         except Exception:
             self.log.debug("couldn't set the bank quantity to All", exc_info=True)
         clicks = 0
         menu_mode = False  # the quantity button isn't on All: right-click -> Deposit-All
-        last_used = None
+        t0 = time.time()
         for _ in range(30):
             if self.terminate:
                 break
-            sc = self.client.get_screenshot()
-            used = inventory.used_slots(sc)
-            if last_used is not None and not menu_mode and last_used - len(used) <= 1 and len(used) > 4:
-                self.log.info("One item per click: using right-click Deposit-All")
-                menu_mode = True
-            last_used = len(used)
-            keep = []
-            try:
-                keep = self.client.get_inv_items(list(self.cfg.keep_items.value), min_confidence=0.9,
-                                                 verify_tab=False)
-            except Exception:
-                pass
-            keep_slots = {self.inv_slot(k).bounding_box[:2] for k in keep}
+            used = inventory.used_slots(self.client.get_screenshot())
             rest = [u for u in used if self.inv_slot(u).bounding_box[:2] not in keep_slots]
             if not rest:
                 break
             pick = random.choice(rest[:4])
             if menu_mode:
-                from core.input.mouse_control import ClickType
                 self.client.click(self.inv_point(pick), click_type=ClickType.RIGHT)
                 time.sleep(random.uniform(0.2, 0.35))
                 if not self._menu_click(["deposit-all", "deposit-al", "-all"]):
@@ -546,7 +539,21 @@ class BotExecutor(HumanMixin, Bot):
             else:
                 self.click_inv(pick)
             clicks += 1
-            time.sleep(random.uniform(0.5, 0.9))  # the game moves items on its tick
+            # off the inventory (into the bank window), then wait for the game's tick
+            self.client.move_to((random.randint(120, 400), random.randint(90, 250)))
+            before, end = len(rest), time.time() + 1.5
+            gone = 0
+            while time.time() < end:
+                time.sleep(random.uniform(0.15, 0.25))
+                now = [u for u in inventory.used_slots(self.client.get_screenshot())
+                       if self.inv_slot(u).bounding_box[:2] not in keep_slots]
+                gone = before - len(now)
+                if gone > 0:
+                    break
+            if gone == 1 and before > 3 and not menu_mode:
+                self.log.info("One item per click: using right-click Deposit-All")
+                menu_mode = True
+        self.log.debug(f"Deposit: {clicks} click(s) in {time.time() - t0:.1f}s")
         return clicks
 
     def bank_logs(self):
@@ -557,10 +564,16 @@ class BotExecutor(HumanMixin, Bot):
             n_logs = len(self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9))
         except Exception:
             n_logs = 0
+        # the keep items' slots (axe, tinderbox): read now, in the normal inventory
+        try:
+            keep = self.client.get_inv_items(list(self.cfg.keep_items.value), min_confidence=0.9)
+        except Exception:
+            keep = []
+        keep_slots = {self.inv_slot(k).bounding_box[:2] for k in keep}
         if not self._open_bank():
             self.log.warning("Couldn't open the bank")
             return False
-        self._deposit_all_but_keep()
+        self._deposit_all_but_keep(keep_slots)
         left = 0
         try:
             left = len(self.client.get_inv_items([self.cfg.log_type.name], min_confidence=0.9, verify_tab=False))
