@@ -939,8 +939,12 @@ class BotExecutor(HumanMixin, Bot):
                     dy = self.FIRE_ROWS[self._fire_row % len(self.FIRE_ROWS)]
                     if row_fires == 0:
                         self._row_fails[dy] = self._row_fails.get(dy, 0) + 1
-                    elif row_fires >= 2:
-                        self._lane_len = max(2, row_fires)  # next lines stop before the block
+                    else:
+                        # next lines stop before the block: the usual line length seen
+                        # (median of the last few, at least 4 - one short line is no rule)
+                        self._lane_seen = (getattr(self, "_lane_seen", []) + [row_fires])[-5:]
+                        srt = sorted(self._lane_seen)
+                        self._lane_len = max(4, min(int(self.cfg.fire_lane_tiles.value), srt[len(srt) // 2]))
                     self.log.info(f"Can't light a fire here (line of {row_fires}): next row")
                     if self._next_row():
                         self._to_fire_spot("line blocked")
