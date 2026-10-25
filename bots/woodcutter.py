@@ -199,6 +199,11 @@ class BotExecutor(HumanMixin, Bot):
         # the run starts at the trees: remember where (World Location tile; minimap fallback)
         try:
             self.remember_home()
+            # a fixed tree spot (home_tile) and the bot started elsewhere: walk there first
+            if str(self.cfg.home_tile.value or "").strip():
+                self.go_home(max_tiles=self.cfg.home_max_tiles.value, label="the trees")
+        except ScriptTerminationException:
+            raise
         except Exception:
             self.log.warning("Couldn't remember the tree area yet", exc_info=True)
         

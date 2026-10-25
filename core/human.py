@@ -449,12 +449,27 @@ class HumanMixin:
     def _wrap(a: float) -> float:
         return (a + math.pi) % (2 * math.pi) - math.pi
 
+    def minimap_turn(self, sc=None):
+        """Camera turn in radians, clockwise (0 = north up), read from the compass; None
+        when the compass doesn't match well."""
+        from core.position import compass_yaw, COMPASS_FROM_GLOBE
+        try:
+            g = self.client.minimap.globe
+            centre = (g.start_x + COMPASS_FROM_GLOBE[0], g.start_y + COMPASS_FROM_GLOBE[1])
+            deg, score = compass_yaw(sc or self.client.get_screenshot(), centre)
+        except Exception:
+            self.log.debug("compass read failed", exc_info=True)
+            return None
+        if score < float(_v(self.cfg, "compass_match", 0.55)):
+            self.log.debug(f"Compass not matched (score {score:.2f})")
+            return None
+        return math.radians(deg)
+
     def walk_to_tile(self, target, tol: float = 1.5, label: str = "the target",
                      max_clicks: int = 14) -> bool:
-        """Walk to a world tile with minimap clicks. True when within `tol` tiles."""
-        yaw = getattr(self, "_mm_yaw", None)          # minimap turn (radians), learnt
-        turns = getattr(getattr(self, "camera", None), "turns", 0)
-        sure = yaw is not None and getattr(self, "_mm_turns", None) == turns
+        """Walk to a world tile with minimap clicks. True when within `tol` tiles.
+        Each click: read the tile (World Location panel) and the camera turn (compass),
+        click the minimap toward the target, wait until the character stands still."""
         ppt = getattr(self, "_mm_ppt", self.MINIMAP_PX_PER_TILE)
         stuck = 0
         mm = self.client.minimap.map
@@ -462,7 +477,8 @@ class HumanMixin:
         for i in range(max_clicks):
             if self.terminate:
                 return False
-            cur = self.my_tile()
+            sc = self.client.get_screenshot()
+            cur = self.my_tile(sc)
             if cur is None:
                 return False
             dx, dy = target[0] - cur[0], target[1] - cur[1]
@@ -471,25 +487,28 @@ class HumanMixin:
                 if i:
                     self.log.info(f"Back at {label} ({cur[0]}, {cur[1]}) after {i} click(s)")
                 return True
+            yaw = self.minimap_turn(sc)
+            sure = yaw is not None
+            if not sure:
+                yaw = getattr(self, "_mm_yaw", 0.0)
             a_world = math.atan2(-dy, dx)  # north-up minimap angle (screen y grows down)
-            ang = a_world + (yaw or 0.0)
-            far = rad_px / ppt
-            step = min(dist, far if sure else 6.0)
+            ang = a_world + yaw
+            step = min(dist, rad_px / ppt if sure else 5.0)
             if stuck:
                 # blocked (fence, wall, tree): try around it
                 ang += math.radians(random.choice((-1, 1)) * random.uniform(35, 75))
                 step = min(step, random.uniform(4, 7))
-            step = max(1.0, step + random.uniform(-0.4, 0.4))
-            cx, cy = self.player_dot()
+            step = max(1.0, step + random.uniform(-0.4, 0.3))
+            cx, cy = self.player_dot(sc)
             pt = (int(round(cx + step * ppt * math.cos(ang) + random.uniform(-1, 1))),
                   int(round(cy + step * ppt * math.sin(ang) + random.uniform(-1, 1))))
             self.client.click(pt)
             end = self._wait_stopped(cur, timeout=3.0 + step * 0.7)
             mx, my = end[0] - cur[0], end[1] - cur[1]
             moved = math.hypot(mx, my)
-            self.log.debug(f"Walk: {cur[:2]} -> {end[:2]} (clicked {step:.1f} tiles at "
-                           f"{math.degrees(ang):.0f} deg, turn guess "
-                           f"{'?' if yaw is None else round(math.degrees(yaw))})")
+            self.log.info(f"Walk: {cur[0]},{cur[1]} -> {end[0]},{end[1]} (wanted {step:.1f} tiles "
+                          f"toward {target[0]},{target[1]}; camera turn "
+                          f"{math.degrees(yaw):.0f} deg{'' if sure else ' (guess)'})")
             if moved < 1.0:
                 stuck += 1
                 if stuck >= 4:
@@ -497,16 +516,14 @@ class HumanMixin:
                 continue
             stuck = 0
             if moved >= 2.5:
-                est = self._wrap(ang - math.atan2(-my, mx))
+                err = self._wrap(ang - math.atan2(-my, mx) - yaw)
                 if not sure:
-                    yaw, sure = est, True
-                else:
-                    err = self._wrap(est - yaw)
-                    yaw = self._wrap(yaw + 0.6 * err)
-                    if abs(math.degrees(err)) < 25 and moved < dist - 0.5:
-                        # stopped short of the target where we clicked: scale check
-                        ppt = min(8.0, max(2.5, ppt + 0.3 * (ppt * step / moved - ppt)))
-                self._mm_yaw, self._mm_ppt, self._mm_turns = yaw, ppt, turns
+                    self._mm_yaw = self._wrap(yaw + 0.6 * err)
+                elif abs(math.degrees(err)) < 20 and abs(moved - step) > 0.8:
+                    # walked the way we clicked but not as far: the minimap zoom differs
+                    # from the px-per-tile guess (moved less = more px per tile)
+                    ppt = min(8.0, max(2.5, ppt + 0.3 * (ppt * step / moved - ppt)))
+                    self._mm_ppt = ppt
         return self._tile_dist(target) <= tol
 
     # ------------------------------------------------------------ one step aside

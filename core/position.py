@@ -122,3 +122,49 @@ def read_tile(sc) -> tuple[int, int, int] | None:
         if str(chunk) in nxt or str(region) in nxt:
             return x, y, z
     return None
+
+
+# ---------------------------------------------------------------- compass (camera turn)
+# The compass above the minimap turns with the camera exactly like the minimap. Matching
+# it against a north-up picture (data/ui/compass-north.png, 40x40 around its centre) at
+# every angle gives the turn - no clicks needed.
+COMPASS_FROM_GLOBE = (-151, -98)  # compass centre - world-map orb top-left (measured)
+_REF = None
+
+
+def _ref():
+    global _REF
+    if _REF is None:
+        from PIL import Image
+        _REF = np.asarray(Image.open('data/ui/compass-north.png').convert('L'), dtype=np.float32)
+    return _REF
+
+
+def compass_yaw(sc, centre) -> tuple[float, float]:
+    """(turn in degrees clockwise: 0 = north up, 90 = north points right, match score).
+    `centre` = the compass centre in window coords."""
+    import cv2
+    ref = _ref()
+    cx, cy = int(round(centre[0])), int(round(centre[1]))
+    pad = 3  # tolerate a centre a few px off
+    crop = np.asarray(sc.convert('L').crop((cx - 20 - pad, cy - 20 - pad, cx + 20 + pad, cy + 20 + pad)),
+                      dtype=np.float32)
+    h = 13  # half-size of the matched square (the dial face, radius ~15)
+
+    def score(a):
+        m = cv2.getRotationMatrix2D((19.5, 19.5), a, 1.0)
+        rot = cv2.warpAffine(ref, m, (40, 40), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        tpl = rot[20 - h:20 + h, 20 - h:20 + h]
+        return float(cv2.matchTemplate(crop, tpl, cv2.TM_CCOEFF_NORMED).max())
+
+    best_a, best_s = 0.0, -2.0
+    for a in range(0, 360, 4):
+        s = score(a)
+        if s > best_s:
+            best_a, best_s = float(a), s
+    for a in np.arange(best_a - 3, best_a + 3.01, 1.0):
+        s = score(a)
+        if s > best_s:
+            best_a, best_s = float(a), s
+    # cv2 turns counter-clockwise for positive angles: the compass turned clockwise by -a
+    return (-best_a) % 360.0, best_s
