@@ -225,13 +225,19 @@ class Launcher:
         self.window_title = window_title
         self.slots = slots
         self.runs: dict[str, dict] = {}
+        self.last: dict[str, dict] = {}  # per slot: the bot + run time of its last launch
         self._load()
         threading.Thread(target=self._loop, daemon=True, name="launcher").start()
 
     # ------------------------------------------------------------ state
     def _load(self):
         try:
-            self.runs = json.loads(STATE_FILE.read_text()).get("runs", {})
+            data = json.loads(STATE_FILE.read_text())
+            self.runs = data.get("runs", {})
+            self.last = data.get("last", {})
+            for k, r in self.runs.items():  # runs from before this was kept
+                if k not in self.last and r.get("bot") and r["bot"] != FREEROAM:
+                    self.last[k] = {"bot": r["bot"], "minutes": round((r["stop_at"] - r["start_at"]) / 60)}
             # a start that was in progress when the dashboard restarted: retry it
             for r in self.runs.values():
                 if r["status"] == "starting":
@@ -245,7 +251,7 @@ class Launcher:
     def _save(self):
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"runs": self.runs}, indent=1))
+        tmp.write_text(json.dumps({"runs": self.runs, "last": self.last}, indent=1))
         tmp.replace(STATE_FILE)
 
     def _set(self, n: int, **kw):
@@ -264,7 +270,7 @@ class Launcher:
                 r["stops_in"] = max(0, int(r["stop_at"] - now))
                 r["activity"] = self._activity(r)
                 out[k] = r
-            return {"now": now, "runs": out}
+            return {"now": now, "runs": out, "last": dict(self.last)}
 
     def launch(self, slots: list[int], bot: str, minutes: float, spread: bool = True) -> dict:
         slots = [n for n in slots if 1 <= n <= self.slots]
@@ -288,6 +294,8 @@ class Launcher:
                     "slot": n, "bot": bot, "start_at": t, "stop_at": t + run_s,
                     "status": "waiting", "msg": "", "account": self.window_title(n)[len("RuneLite - "):],
                 }
+                if bot != FREEROAM:  # the launcher preselects this next time the account is chosen
+                    self.last[str(n)] = {"bot": bot, "minutes": minutes}
             self._save()
         return self.status()
 

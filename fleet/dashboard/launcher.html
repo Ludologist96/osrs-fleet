@@ -216,7 +216,7 @@ async function loadAccounts() {
     el.innerHTML = `<input type="checkbox" value="${sl.slot}" ${name && !busy ? '' : 'disabled'} ${checked.has(String(sl.slot)) && !busy ? 'checked' : ''}>
       <span class="sl">${sl.slot}</span><span class="nm"></span>`;
     el.querySelector('.nm').textContent = name || 'no login';
-    el.querySelector('input').addEventListener('change', accLabel);
+    el.querySelector('input').addEventListener('change', () => { accLabel(); preselect(); });
     if (busy) el.title = 'already launched';
     if (!name) {   // new account: copy the login that the Jagex Launcher last saved on Windows
       const b = document.createElement('button'); b.className = 'cl'; b.textContent = 'copy login';
@@ -240,6 +240,19 @@ async function loadAccounts() {
   }
   accLabel();
   for (const n of shown) setLabel(n);
+}
+// choosing accounts: preselect the bot and run time they ran last (their settings are
+// saved per account and bot, so ⚙ Settings then shows exactly those)
+let lastRun = {};
+function preselect() {
+  const sel = [...document.querySelectorAll('#accts input:checked')].map(i => i.value);
+  const prev = sel.map(n => lastRun[n]).filter(Boolean);
+  if (!prev.length || prev.some(p => p.bot !== prev[0].bot)) return;   // nothing known / mixed
+  const b = $('bot'); if (![...b.options].some(o => o.value === prev[0].bot)) return;
+  b.value = prev[0].bot;
+  if (sel.length === 1 && prev[0].minutes) {
+    $('hours').value = Math.floor(prev[0].minutes / 60); $('mins').value = Math.round(prev[0].minutes % 60);
+  }
 }
 function accLabel() {
   const sel = [...document.querySelectorAll('#accts input:checked')];
@@ -325,7 +338,7 @@ $('pxtest').onclick = async () => {
 };
 
 async function loadRuns() {
-  const st = await api('/api/launch'); runs = st.runs; const box = $('runs'); box.innerHTML = '';
+  const st = await api('/api/launch'); runs = st.runs; lastRun = st.last || {}; const box = $('runs'); box.innerHTML = '';
   const keys = Object.keys(runs);
   if (!keys.length) box.innerHTML = '<span class="small">Nothing launched.</span>';
   for (const k of keys) {
@@ -421,17 +434,16 @@ const FORMS = {
 };
 let cfgSlots = [], cfgBot = '', cfgLoaded = null;
 function cfgTargets() {
-  const sel = [...document.querySelectorAll('#accts input:checked')].map(i => +i.value);
-  return sel.length ? sel : Object.keys(names).filter(n => names[n]).map(Number);
+  // only the chosen accounts: saving for "all" overwrote other accounts' settings
+  return [...document.querySelectorAll('#accts input:checked')].map(i => +i.value);
 }
 $('cfgopen').onclick = async () => {
   cfgBot = $('bot').value; $('cfgout').textContent = ''; $('cfgbody').innerHTML = '';
   if (cfgBot === 'freeroam') { $('err').textContent = 'Free roam has no settings.'; return; }
   cfgSlots = cfgTargets();
-  if (!cfgSlots.length) { $('err').textContent = 'No account with a login.'; return; }
+  if (!cfgSlots.length) { $('err').textContent = 'Choose the account(s) first (Accounts ▾): settings are kept per account.'; return; }
   $('cfgt').textContent = `${$('bot').selectedOptions[0].textContent} – settings`;
-  $('cfgfor').textContent = `For: ${cfgSlots.map(n => `${n} ${names[n] || ''}`).join(', ')}` +
-    (document.querySelector('#accts input:checked') ? '' : ' (no account chosen: all of them)');
+  $('cfgfor').textContent = `For: ${cfgSlots.map(n => `${n} ${names[n] || ''}`).join(', ')}`;
   $('cfgd').showModal();
   try { cfgLoaded = await api(`/api/slot/${cfgSlots[0]}/botcfg/${cfgBot}`); }
   catch (e) { $('cfgout').textContent = 'Couldn\'t read the settings: ' + e.message; return; }
