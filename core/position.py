@@ -130,8 +130,8 @@ def read_tile(sc) -> tuple[int, int, int] | None:
 # every angle gives the turn - no clicks needed.
 COMPASS_FROM_GLOBE = (-151, -98)  # compass centre - world-map orb top-left (measured)
 # the character always sits at the minimap's centre: world-map orb top-left + this (measured
-# on the player dot in a forest; in towns the dot is lost among white walls)
-MINIMAP_FROM_GLOBE = (-50.5, -49.5)
+# from where walk clicks really took the character, Oct 2026; refined while walking)
+MINIMAP_FROM_GLOBE = (-70.5, -33.0)
 _REF = None
 
 
