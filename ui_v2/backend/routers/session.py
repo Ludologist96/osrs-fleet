@@ -113,3 +113,18 @@ def session_tab(name: str) -> Dict[str, Any]:
     from core.control import ScriptControl
     ScriptControl().reset()
     return {"ok": account_setup.tab(login._window(), name)}
+
+
+@router.post("/setup")
+def session_setup(what: str = "levelup") -> Dict[str, Any]:
+    """One-time account settings (no bot running): what=levelup -> level-up pop-ups off."""
+    _idle_slot()
+    from core import login, account_setup
+    from core.control import ScriptControl
+    ScriptControl().reset()
+    if what != "levelup":
+        raise HTTPException(status_code=400, detail="unknown setup")
+    try:
+        return account_setup.disable_levelup_popup(login._window())
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}

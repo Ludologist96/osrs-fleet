@@ -250,6 +250,7 @@ class Launcher:
             data = json.loads(STATE_FILE.read_text())
             self.runs = data.get("runs", {})
             self.last = data.get("last", {})
+            self.setup_done = data.get("setup_done", {})
             for k, r in self.runs.items():  # runs from before this was kept
                 if k not in self.last and r.get("bot") and r["bot"] != FREEROAM:
                     self.last[k] = {"bot": r["bot"], "minutes": round((r["stop_at"] - r["start_at"]) / 60)}
@@ -262,11 +263,14 @@ class Launcher:
             self.runs = {}
         except Exception:
             self.runs = {}
+        if not hasattr(self, "setup_done"):
+            self.setup_done = {}
 
     def _save(self):
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"runs": self.runs, "last": self.last}, indent=1))
+        tmp.write_text(json.dumps({"runs": self.runs, "last": self.last,
+                                   "setup_done": self.setup_done}, indent=1))
         tmp.replace(STATE_FILE)
 
     def _set(self, n: int, **kw):
@@ -411,6 +415,24 @@ class Launcher:
             time.sleep(3)
         time.sleep(15)  # let the login screen finish loading
 
+    def _account_setup(self, n: int):
+        """Once per account: game settings the bots need (level-up pop-ups off).
+        Kept in the state file by account name; a failure is retried on the next launch."""
+        acct = self.runs.get(str(n), {}).get("account") or ""
+        if not acct or "levelup" in self.setup_done.get(acct, []):
+            return
+        self._set(n, msg="turning level-up pop-ups off (once per account)")
+        try:
+            res = _http("POST", f"{_app(n)}/api/session/setup?what=levelup", timeout=90)
+        except Exception as e:
+            res = {"ok": False, "error": str(e)}
+        if res.get("ok"):
+            with _lock:
+                self.setup_done.setdefault(acct, []).append("levelup")
+                self._save()
+        else:
+            self._set(n, msg=f"couldn't turn level-up pop-ups off ({res.get('error')}); trying next launch")
+
     def _login(self, n: int, what: str, cancellable: bool = False):
         """Log the slot in. If that fails, restart RuneLite (e.g. the game was updated
         while this client was open) and try once more."""
@@ -474,6 +496,7 @@ class Launcher:
                 return
             if fit_window(n):
                 self._set(n, msg="RuneLite window was partly off-screen: moved it back")
+            self._account_setup(n)
             if bot == FREEROAM:
                 with _lock:
                     r = self.runs[str(n)]
