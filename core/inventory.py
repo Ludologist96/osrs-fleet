@@ -34,3 +34,36 @@ def slots(sc: Image.Image) -> list[tuple[MatchResult, float]]:
 
 def used_slots(sc: Image.Image) -> list[MatchResult]:
     return [r for r, sd in slots(sc) if sd > ITEM_STDDEV]
+
+
+def snapshot(sc: Image.Image):
+    """Grayscale copy of the 28 slots, to compare later with changed_slots()."""
+    x0, y0 = ORIGIN
+    x1 = x0 + 3 * STEP[0] + SLOT[0]
+    y1 = y0 + 6 * STEP[1] + SLOT[1]
+    return sc.convert("L").crop((x0, y0, x1, y1))
+
+
+def changed_slots(before, sc: Image.Image, min_px: int = 6, diff: int = 40) -> list[int]:
+    """Slots (0-27) whose pixels changed since snapshot `before`: a new item, a gone item,
+    or a stack whose number changed (stackables like feathers don't fill a new slot)."""
+    now = snapshot(sc)
+    if before is None or now.size != before.size:
+        return []
+    a, b = before.load(), now.load()
+    out = []
+    for row in range(7):
+        for col in range(4):
+            x, y = col * STEP[0], row * STEP[1]
+            n = 0
+            for yy in range(y, y + SLOT[1], 1):
+                for xx in range(x, x + SLOT[0], 1):
+                    if abs(a[xx, yy] - b[xx, yy]) > diff:
+                        n += 1
+                        if n >= min_px:
+                            break
+                if n >= min_px:
+                    break
+            if n >= min_px:
+                out.append(row * 4 + col)
+    return out

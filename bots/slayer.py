@@ -1010,8 +1010,9 @@ class BotExecutor(HumanMixin, Bot):
                 return
             before_slots = self._free_slots()
             before_items = self._count_items(names)
+            snap = self._inv_snap()
             # first a plain click where the item should be (no mouse-over check)...
-            quick = self._instant_take(pts[0], before_slots, before_items, names)
+            quick = self._instant_take(pts[0], before_slots, before_items, names, snap)
             if quick == "ok":
                 self.looted += 1
                 self.count("loot")
@@ -1023,6 +1024,7 @@ class BotExecutor(HumanMixin, Bot):
                 # on/next to the pile - look there, then use the mouse-over
                 time.sleep(random.uniform(0.3, 0.5))
                 before_slots = self._free_slots()
+                snap = self._inv_snap()
                 pts = self._pile_points(self._loot_mask(), around=self._player_point(), radius=70) or pts
             if not self._take_from_points(pts, names):
                 pts2 = self._zoom_in_for_pile(pts)
@@ -1034,7 +1036,8 @@ class BotExecutor(HumanMixin, Bot):
             deadline = time.time() + float(self.cfg.pickup_timeout.value)
             while time.time() < deadline and not self.terminate:
                 time.sleep(random.uniform(0.2, 0.35))
-                if self._free_slots() < before_slots or self._count_items(names) > before_items:
+                if (self._free_slots() < before_slots or self._count_items(names) > before_items
+                        or self._stack_grew(snap, names)):
                     self.looted += 1
                     self.count("loot")
                     self.log.info(f"Picked up loot ({self.looted} so far)")
@@ -1048,7 +1051,7 @@ class BotExecutor(HumanMixin, Bot):
         self._zoom_back()
 
     def _instant_take(self, pt: tuple[int, int], before_slots: int, before_items: int,
-                      names: list[str]) -> str:
+                      names: list[str], snap=None) -> str:
         """quick_loot: left-click the likeliest item spot at once, then check the inventory
         after instant_check s. "" = not tried, "ok" = got a wanted item, "miss" = nothing
         taken, "wrong" = took another item (dropped again). Skipped when a highlighted
@@ -1066,7 +1069,7 @@ class BotExecutor(HumanMixin, Bot):
         slots_before = inventory.used_slots(self.client.get_screenshot())
         self.quick_click(pt)
         time.sleep(self.cfg.instant_check.choose())
-        if self._count_items(names) > before_items:
+        if self._count_items(names) > before_items or self._stack_grew(snap, names):
             return "ok"
         after = inventory.used_slots(self.client.get_screenshot())
         if len(after) <= len(slots_before):
@@ -1112,6 +1115,36 @@ class BotExecutor(HumanMixin, Bot):
             time.sleep(random.uniform(0.2, 0.6))
             self.camera.zoom_by(-n)
             self._loot_zoom = 0
+
+    def _inv_snap(self):
+        """Inventory picture before a pick-up (stack numbers included)."""
+        from core import inventory
+        try:
+            return inventory.snapshot(self.client.get_screenshot())
+        except Exception:
+            return None
+
+    def _stack_grew(self, snap, names: list[str]) -> bool:
+        """A stackable wanted item (e.g. Feather) was taken: no new slot or icon, but the
+        slot holding it changed (its number went up)."""
+        if snap is None:
+            return False
+        from core import inventory
+        try:
+            sc = self.client.get_screenshot()
+            changed = inventory.changed_slots(snap, sc)
+            if not changed:
+                return False
+            have = self.client.get_inv_items(names, min_confidence=0.85)
+        except Exception:
+            return False
+        for m in have:
+            cx, cy = m.get_center()
+            col = int((cx - inventory.ORIGIN[0]) // inventory.STEP[0])
+            row = int((cy - inventory.ORIGIN[1]) // inventory.STEP[1])
+            if 0 <= col < 4 and 0 <= row < 7 and row * 4 + col in changed:
+                return True
+        return False
 
     def _count_items(self, names: list[str]) -> int:
         try:
