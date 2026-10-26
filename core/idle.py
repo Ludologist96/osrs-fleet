@@ -36,16 +36,25 @@ def browse_tabs(client, control, log, look_time=(2.0, 6.0), max_tabs: int = 3) -
     if back == ToolplaneTab.LOGOUT:
         back = ToolplaneTab.INVENTORY
 
+    # only tabs whose icon was found on this client (an unfound one is None and crashed the break)
+    found = [t for t in BROWSE_TABS if getattr(client.toolplane, t.value, None) is not None]
+    if not found:
+        log.info("Break: no side-panel tabs found to look at")
+        return
     tabs = []
     for _ in range(random.randint(1, max_tabs)):
-        t = random.choice(BROWSE_TABS)
+        t = random.choice(found)
         if t != back and t not in tabs:
             tabs.append(t)
     if not tabs:
-        tabs = [ToolplaneTab.SKILLS if back != ToolplaneTab.SKILLS else ToolplaneTab.PROGRESS]
+        tabs = [t for t in found if t != back][:1]
+        if not tabs:
+            return
     log.info(f"Break: looking at {', '.join(t.name.lower() for t in tabs)}, then back to {back.name.lower()}")
     _sleep(control, random.uniform(0.3, 1.2))
     for t in tabs:
         client.click_toolplane(t)
         _sleep(control, random.uniform(*look_time))
+    if getattr(client.toolplane, back.value, None) is None:
+        back = ToolplaneTab.INVENTORY
     client.click_toolplane(back)
