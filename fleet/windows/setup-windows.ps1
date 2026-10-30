@@ -8,6 +8,13 @@
 #   2. Gives the Linux VM enough RAM and CPU for 8 RuneLite clients (.wslconfig).
 #   3. Adds a hidden logon task that keeps the VM running while you are logged in.
 #   4. Optionally stops the PC from going to sleep (bots stop when it sleeps).
+#
+# Smaller PC / laptop (everything in one go, run again after each restart it asks for):
+#   powershell -ExecutionPolicy Bypass -File <repo>\fleet\windows\setup-windows.ps1 -Slots 4 -VmRamGB 5 -VmCpu 3 -Install
+#   -Slots N     slots this PC runs (written to /etc/osrs/fleet.conf before the install)
+#   -VmRamGB/-VmCpu  VM size instead of the automatic 65% RAM / all-but-2 cores
+#   -Install     also runs fleet/linux/install.sh inside the VM (no Ubuntu window needed)
+param([int]$Slots = 0, [int]$VmRamGB = 0, [int]$VmCpu = 0, [switch]$Install)
 
 $ErrorActionPreference = "Stop"
 $Distro = "Ubuntu-24.04"
@@ -19,6 +26,17 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) {
     Write-Host "Please run this in PowerShell opened with 'Run as administrator'." -ForegroundColor Red
     exit 1
+}
+
+# ------------------------------------------------------------------ 0. virtualization (VT-x / AMD-V)
+$cs = Get-CimInstance Win32_ComputerSystem
+if (-not $cs.HypervisorPresent) {
+    $virt = (Get-CimInstance Win32_Processor | Select-Object -First 1).VirtualizationFirmwareEnabled
+    if ($virt -eq $false) {
+        Write-Host "Virtualization (Intel VT-x / AMD-V) is OFF in the BIOS. WSL2 needs it." -ForegroundColor Red
+        Write-Host "Restart into the BIOS (HP laptops: press F10 at power-on), turn on 'Virtualization Technology', save, then run this again."
+        exit 1
+    }
 }
 
 # ------------------------------------------------------------------ 1. WSL + Ubuntu
@@ -50,8 +68,10 @@ $cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLog
 # Leave room for Windows: give the VM ~65% of RAM (max 48 GB) and all but 2 logical cores.
 $vmRam = [math]::Min(48, [math]::Max(8, [math]::Floor($ramGB * 0.65)))
 $vmCpu = [math]::Max(2, $cores - 2)
+if ($VmRamGB -gt 0) { $vmRam = $VmRamGB }
+if ($VmCpu -gt 0) { $vmCpu = [math]::Min($VmCpu, $cores) }
 Write-Host "PC: $ramGB GB RAM, $cores logical cores  ->  VM: $vmRam GB RAM, $vmCpu cores"
-if ($ramGB -lt 16) {
+if ($ramGB -lt 16 -and $Slots -le 0) {
     Write-Host "Warning: under 16 GB RAM. 8 clients will be tight; lower SLOTS in /etc/osrs/fleet.conf." -ForegroundColor Yellow
 }
 
@@ -83,7 +103,26 @@ $ans = Read-Host "`nStop this PC from sleeping while plugged in? Bots stop when 
 if ($ans -match '^[yY]') {
     powercfg /change standby-timeout-ac 0
     powercfg /change hibernate-timeout-ac 0
+    if ((Get-CimInstance Win32_SystemEnclosure).ChassisTypes | Where-Object { $_ -in 8,9,10,14,31,32 }) {
+        # laptop: closing the lid on AC power does nothing (otherwise it sleeps and the bots stop)
+        powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0
+        powercfg /setactive SCHEME_CURRENT
+        Write-Host "Laptop: closing the lid on AC power now does nothing."
+    }
     Write-Host "Sleep disabled on AC power (the screen can still turn off)."
+}
+
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$drive = $repo.Substring(0,1).ToLower()
+$linuxRepo = "/mnt/$drive" + ($repo.Substring(2) -replace '\\','/')
+
+# ------------------------------------------------------------------ slot count + systemd (before the VM restart)
+if ($Slots -gt 0) {
+    Say "Setting this PC to $Slots slots"
+    wsl.exe -d $Distro -u root -- bash -c "mkdir -p /etc/osrs; [ -f /etc/osrs/fleet.conf ] || cp '$linuxRepo/fleet/linux/fleet.conf' /etc/osrs/fleet.conf; sed -i 's/^SLOTS=.*/SLOTS=$Slots/' /etc/osrs/fleet.conf; grep '^SLOTS' /etc/osrs/fleet.conf"
+}
+if ($Install) {
+    wsl.exe -d $Distro -u root -- bash -c "grep -qs '^systemd *= *true' /etc/wsl.conf || printf '[boot]\nsystemd=true\n' >> /etc/wsl.conf"
 }
 
 # ------------------------------------------------------------------ restart VM with new size, start task
@@ -92,9 +131,13 @@ wsl.exe --shutdown
 Start-Sleep -Seconds 3
 Start-ScheduledTask -TaskName "OSRS Fleet"
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$drive = $repo.Substring(0,1).ToLower()
-$linuxRepo = "/mnt/$drive" + ($repo.Substring(2) -replace '\\','/')
+if ($Install) {
+    Say "Installing the fleet inside the VM (10-20 minutes the first time)"
+    Start-Sleep -Seconds 5
+    wsl.exe -d $Distro -u root -- bash "$linuxRepo/fleet/linux/install.sh"
+    Say "Done. Open http://localhost:8000/launcher"
+    exit 0
+}
 
 Say "Windows part done"
 Write-Host @"
