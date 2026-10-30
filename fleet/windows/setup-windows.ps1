@@ -41,22 +41,44 @@ if (-not $cs.HypervisorPresent) {
 
 # ------------------------------------------------------------------ 1. WSL + Ubuntu
 Say "Checking WSL"
-$wslOk = $true
-try { wsl.exe --status *> $null; if ($LASTEXITCODE -ne 0) { $wslOk = $false } } catch { $wslOk = $false }
-if (-not $wslOk) {
-    Say "Installing WSL (Windows will need a restart)"
-    wsl.exe --install --no-distribution
+# Windows 10 has an old built-in wsl.exe that knows neither --status nor --no-distribution:
+# turn on the two Windows features first (one restart), then install the current WSL package.
+$restart = $false
+foreach ($f in 'Microsoft-Windows-Subsystem-Linux','VirtualMachinePlatform') {
+    if ((Get-WindowsOptionalFeature -Online -FeatureName $f).State -ne 'Enabled') {
+        Say "Turning on the Windows feature $f"
+        Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart | Out-Null
+        $restart = $true
+    }
+}
+if ($restart) {
     Write-Host "`nRestart the PC, then run this script again." -ForegroundColor Yellow
     exit 0
 }
-wsl.exe --update | Out-Null
+$ErrorActionPreference = "Continue"
+wsl.exe --version *> $null
+if ($LASTEXITCODE -ne 0) {
+    Say "Installing the current WSL (download, a few minutes)"
+    wsl.exe --update --web-download
+    wsl.exe --version *> $null
+    if ($LASTEXITCODE -ne 0) { wsl.exe --update }
+    wsl.exe --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WSL could not be updated. Run the script again; if it repeats, send Claude the output." -ForegroundColor Red
+        exit 1
+    }
+} else {
+    wsl.exe --update | Out-Null
+}
+wsl.exe --set-default-version 2 | Out-Null
+$ErrorActionPreference = "Stop"
 
 $distros = (wsl.exe --list --quiet) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
 if (-not ($distros -contains $Distro)) {
     Say "Installing $Distro"
     Write-Host "A Ubuntu window will open and ask for a NEW Linux username and password."
     Write-Host "Pick anything (e.g. igor / a password you remember). Then type 'exit' in that window."
-    wsl.exe --install -d $Distro
+    wsl.exe --install -d $Distro --web-download
     Write-Host "`nWhen you have created the user and closed Ubuntu, run this script again." -ForegroundColor Yellow
     exit 0
 }
