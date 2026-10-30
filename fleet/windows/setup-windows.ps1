@@ -61,7 +61,23 @@ if ($LASTEXITCODE -ne 0) {
     Say "Installing the current WSL (download, a few minutes)"
     wsl.exe --update --web-download
     wsl.exe --version *> $null
-    if ($LASTEXITCODE -ne 0) { wsl.exe --update }
+    if ($LASTEXITCODE -ne 0) {
+        # Store / --web-download install failed (seen on Windows 10: "module could not be found",
+        # "Catastrophic failure"): take the MSI straight from Microsoft's GitHub releases.
+        Say "Installing WSL from Microsoft's GitHub release"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $rel = Invoke-RestMethod "https://api.github.com/repos/microsoft/WSL/releases/latest" -Headers @{ 'User-Agent' = 'osrs-fleet' }
+            $asset = $rel.assets | Where-Object { $_.name -match 'x64\.msi$' } | Select-Object -First 1
+            $msi = Join-Path $env:TEMP $asset.name
+            Write-Host "Downloading $($asset.name) ..."
+            Invoke-WebRequest $asset.browser_download_url -OutFile $msi -UseBasicParsing
+            $log = Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path "wsl-install.log"
+            $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
+            Write-Host "WSL installer exit code: $($p.ExitCode) (log: $log)"
+            if ($p.ExitCode -eq 3010) { Write-Host "`nRestart the PC, then run this script again." -ForegroundColor Yellow; exit 0 }
+        } catch { Write-Host "Download/install failed: $_" -ForegroundColor Red }
+    }
     wsl.exe --version *> $null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "WSL could not be updated. Run the script again; if it repeats, send Claude the output." -ForegroundColor Red
