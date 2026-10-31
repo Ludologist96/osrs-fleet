@@ -687,7 +687,7 @@ class BotExecutor(HumanMixin, Bot):
              self.do_equipment_stats),
             ("sword and shield", lambda: H("unequip"), self.do_sword_shield),
             ("bow", lambda: H("bow") and H("arrows"), self.do_bow),
-            ("attack rat", lambda: H("rat") and H("slay", "attack"), self.do_attack_rat),
+            ("attack rat", lambda: H("rat") and H("slay", "attack", "enter the cage", "rat is dead"), self.do_attack_rat),
             ("first kill", lambda: H("first kill", "gate and talk", "made your first kill"), self.do_after_kill),
             ("bank", lambda: H("this is your bank"), self.do_close_bank),
             ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
