@@ -356,6 +356,16 @@ class BotExecutor(HumanMixin, Bot):
         if self._dialogue(low, sc):
             self.unknown = 0
             return
+        if getattr(self, "_last_option", "") and time.time() - getattr(self, "_last_option_t", 0) < 10:
+            # just answered a menu: the answer line / the NPC's reply follow; OCR sometimes
+            # misses them and the top-left box ("speak to the instructor") was read instead,
+            # which restarted the whole mainland dialogue. Continue it with space.
+            self._last_option = ""
+            time.sleep(self.cfg.continue_pause.choose())
+            keyboard.press_and_release("space")
+            self.log.debug("Dialogue: space (right after a menu answer)")
+            time.sleep(random.uniform(0.6, 1.0))
+            return
         if len(re.sub(r"[^a-z]", "", low)) < 18:
             low = ""  # just the chat input line ("Name: *") or OCR crumbs
         if not low.strip():
@@ -656,6 +666,7 @@ class BotExecutor(HumanMixin, Bot):
             pick = next((i for i, t in enumerate(texts) if not any(n in t for n in never)), 0)
         self.log.info(f"Options {[o['text'] for o in options]}: choosing {pick + 1}")
         self._last_option = re.sub(r"[^a-z ]", "", texts[pick])
+        self._last_option_t = time.time()
         time.sleep(self.cfg.continue_pause.choose())
         if idx >= 0 and random.random() < 0.5:  # (without the header the number may be off)
             keyboard.press_and_release(str(pick + 1))
