@@ -125,7 +125,14 @@ def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
            "worldlocation.tileLocation": "false",
            # minimap at a known zoom: walking clicks it at 4 px per tile (slot 8 had 2.0
            # and every walk went twice as far as wanted)
-           "minimap.zoom": "true", "minimap.zoomLevel": "4.0"}
+           "minimap.zoom": "true", "minimap.zoomLevel": "4.0",
+           # RuneLite draws in software in the VM (no GPU): uncapped it ran at ~50 FPS and
+           # one client took 1.5-3 of the laptop's 3 CPU threads. The bots read the screen a
+           # few times a second, so 20 FPS is plenty
+           "runelite.gpuplugin": "false",  # GPU plugin = OpenGL = software llvmpipe here
+           "runelite.fpscontrolplugin": "true", "fpscontrol.limitFps": "true",
+           "fpscontrol.maxFps": "20", "fpscontrol.limitFpsUnfocused": "true",
+           "fpscontrol.maxFpsUnfocused": "20", "fpscontrol.drawFps": "false"}
     if bot == "tutorial_island":
         # the tutorial bot talks to these NPCs (cyan hulls), fights rats/a chicken
         # (Opponent Information health bar) and checks it reached the mainland (tile)

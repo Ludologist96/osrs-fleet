@@ -69,6 +69,9 @@ case "$comp" in
         for a in $cjvm; do
             jargs+=("-J$a")
         done
+        # No OpenGL: there is no GPU in the VM, so OpenGL runs in software (Mesa llvmpipe)
+        # and one RuneLite took 1.5-2 CPU threads. Plain Java2D drawing is far cheaper.
+        jargs+=("--hw-accel=OFF" "-J-Dsun.java2d.opengl=false")
         # shellcheck disable=SC2086
         java ${JAVA_OPTS:-} -jar /opt/osrs/runelite/RuneLite.jar "${jargs[@]}" || true
         # The launcher starts the game in a second Java process and exits.

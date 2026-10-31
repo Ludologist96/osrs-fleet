@@ -206,4 +206,39 @@ def slot_processes(uid: int) -> list[dict]:
                         "pss": vals.get("Pss", 0), "swap": vals.get("Swap", 0)})
         except (OSError, ValueError):
             continue
+    # CPU over one second (% of one thread), and for busy processes their busiest threads
+    # (Java names its threads: GC, AWT-EventQueue, Client...): shows what eats the CPU
+    def ticks(path):
+        try:
+            f = open(path).read().rsplit(")", 1)[1].split()
+            return int(f[11]) + int(f[12])
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def thread_ticks(pid):
+        res = {}
+        for t in glob.glob(f"/proc/{pid}/task/[0-9]*"):
+            v = ticks(t + "/stat")
+            if v is not None:
+                try:
+                    name = open(t + "/comm").read().strip()
+                except OSError:
+                    name = "?"
+                res[t] = (name, v)
+        return res
+
+    hz = os.sysconf("SC_CLK_TCK")
+    t0 = {p["pid"]: ticks(f"/proc/{p['pid']}/stat") for p in out}
+    th0 = {p["pid"]: thread_ticks(p["pid"]) for p in out if p["rss"] > 100 * 2**20}
+    time.sleep(1.0)
+    for p in out:
+        a, b = t0.get(p["pid"]), ticks(f"/proc/{p['pid']}/stat")
+        p["cpu"] = round((b - a) * 100 / hz, 1) if a is not None and b is not None else None
+        if p["pid"] in th0:
+            th1 = thread_ticks(p["pid"])
+            busy = {}
+            for k, (name, v) in th1.items():
+                if k in th0[p["pid"]]:
+                    busy[name] = busy.get(name, 0) + (v - th0[p["pid"]][k][1]) * 100 / hz
+            p["threads"] = {k: round(v, 1) for k, v in sorted(busy.items(), key=lambda kv: -kv[1])[:6] if v > 0}
     return sorted(out, key=lambda p: -p["pss"])
