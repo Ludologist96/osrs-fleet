@@ -908,7 +908,21 @@ class BotExecutor(HumanMixin, Bot):
         self.attack_rat()
 
     def do_attack_rat(self, t):
-        self.attack_rat()
+        # outside the pen a rat click gives "I can't reach that" (no gate opening on the
+        # way): after a click without a fight, open the gate first (the arrow is on it)
+        if getattr(self, "_rat_no_fight", 0) >= 1 and not getattr(self, "_in_pen", False):
+            self.log.info("No fight after clicking a rat: going through the pen gate first")
+            hint = self.find_hint(looks=3)
+            ok = False
+            if hint is not None:
+                ok = self.hint_interact(["Open Gate"], search=True)
+            if not ok:
+                ok = self.walk_to_minimap_door() and self.hover_search(["Open Gate"])
+            if ok:
+                self._in_pen = True
+                self.sleep_checked(random.uniform(2.0, 3.0))
+        fought = self.attack_rat()
+        self._rat_no_fight = 0 if getattr(self, "_rat_fought", False) else getattr(self, "_rat_no_fight", 0) + (0 if fought is False else 1)
 
     def do_after_kill(self, t):
         """Out of the rat pen through the gate, then talk to the instructor. Inside the pen
@@ -1618,7 +1632,8 @@ class BotExecutor(HumanMixin, Bot):
         start = time.time()
         while time.time() - start < 6 and not self.fighting():
             self.sleep_checked(0.4)
-        self.log.info("Fighting a rat" if self.fighting() else "No fight seen yet")
+        self._rat_fought = self.fighting()
+        self.log.info("Fighting a rat" if self._rat_fought else "No fight seen yet")
         while self.fighting() and time.time() - start < self.cfg.fight_timeout.value:
             self.sleep_checked(random.uniform(0.6, 1.0))
         self.log.info(f"Rat fight over after {time.time() - start:.0f}s")
