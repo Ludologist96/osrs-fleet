@@ -638,7 +638,7 @@ class BotExecutor(HumanMixin, Bot):
             ("magic: cast", lambda: H("wind strike", "magic casting", "now have some runes", "runes to cast", "on a chicken"),
              self.do_wind_strike),
             ("mainland", lambda: H("mainland"), self.do_mainland),
-            ("fishing", lambda: H("fishing spot", "catch some shrimp"), self.do_fish),
+            ("fishing", lambda: H("fishing spot", "catch some shrimp", "to catch", "the net"), self.do_fish),
             ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "nearby tree", "chop"),
              self.do_chop),
             ("firemaking", lambda: H("tinderbox", "light a fire"), self.do_fire),
@@ -652,7 +652,8 @@ class BotExecutor(HumanMixin, Bot):
             ("mine", lambda: H("mine", "mining") and H("tin", "copper") and not H("bronze bar"), self.do_mine),
             ("wield dagger", lambda: (H("equipment stats", "combined statistics") or (H("dagger") and H("wear", "wield")))
              and not H("unequip", "holding your dagger"), self.do_wield_dagger),
-            ("equipment stats", lambda: H("worn inventory", "shield and helmet") and not H("unequip", "holding your dagger"),
+            ("equipment stats", lambda: H("worn inventory", "shield and helmet") and H("equip", "worn", "helmet")
+             and not H("unequip", "holding your dagger"),
              self.do_equipment_stats),
             ("sword and shield", lambda: H("unequip"), self.do_sword_shield),
             ("bow", lambda: H("bow") and H("arrows"), self.do_bow),
