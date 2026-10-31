@@ -480,6 +480,8 @@ class BotExecutor(HumanMixin, Bot):
         self._blue_title = blue >= 80
         if self._is_dialogue(chat.lower()):
             return chat
+        if has(chat.lower(), "please wait"):
+            return chat  # an NPC line still loading ("Please wait..."): the 'waiting' step
         self._ocr_region(sc, OVERLAY_BOX, "overlay")
         # the World Location panel (Tile / Chunk ID / Region ID, white) sits in the same
         # corner when there is no instruction box: drop its lines and number-only lines
