@@ -95,6 +95,8 @@ class BotConfig(HabitsConfig):
     start_zoom_in: IntParam = IntParam(15)  # the view the island steps were tuned with
     break_ui_browse_chance: FloatParam = FloatParam(0.0)  # side-panel tabs unlock step by step here
     session_max_minutes: IntParam = IntParam(0)  # a ~30 min run: no forced long break
+    # Follow the fixed list of island steps (SCRIPT) instead of picking each step from OCR.
+    scripted: BooleanParam = BooleanParam(True)
     # Save a screenshot whenever a step is retried (for tuning; off once it runs well).
     debug_shots: BooleanParam = BooleanParam(True)
 
@@ -104,6 +106,79 @@ CHAT_BOX = (0, 338, 520, 476)
 # steps after which the character keeps busy on its own for a while (an alt-tab fits)
 ALT_TAB_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "bake", "mine", "smelt",
                  "anvil", "smithing menu", "attack rat", "bow", "magic: cast", "waiting"}
+# The island in order: (step, the instruction it stands for). The steps never change, so
+# the bot follows this list instead of guessing the step from OCR text (OCR misreads picked
+# wrong steps: "baked your first" -> "first kill", "nearby gate" -> woodcutting...). OCR
+# only notices that the instruction CHANGED (any text change = next entry) and is used to
+# resync when it clearly names a different step nearby, and to find the place in the list
+# when an account starts in the middle (no saved progress).
+SCRIPT = [
+    ("talk", "talk to the gielinor guide"),
+    ("tab", "click on the flashing spanner icon to open the settings menu"),
+    ("talk", "on the side panel you see the game settings. talk to the gielinor guide to continue"),
+    ("door", "click on the door, it is indicated by a flashing yellow arrow"),
+    ("walk to npc", "follow the path to find the survival expert"),
+    ("tab", "click on the flashing backpack icon to view the inventory"),
+    ("fishing", "this is your inventory. click on the fishing spot to catch some shrimp"),
+    ("tab", "click on the flashing bar graph icon to open the skills menu"),
+    ("talk", "skills and experience. speak to the survival expert to continue"),
+    ("woodcutting", "you need some logs: cut down a nearby tree"),
+    ("firemaking", "use the tinderbox on the logs to light a fire"),
+    ("cook shrimp", "use the shrimp on a fire to cook them"),
+    ("go on", "speak to the survival expert if you want a recap, otherwise move on through the gate"),
+    ("door", "follow the path until you get to the door with the yellow arrow above it"),
+    ("talk", "talk to the chef"),
+    ("dough", "mix flour with water to make dough"),
+    ("bake", "bake the dough on the range into bread"),
+    ("door", "use the next door to move on"),
+    ("run", "fancy a run? running is faster"),
+    ("talk", "talk to the quest guide"),
+    ("tab", "click on the flashing icon to open the quest journal"),
+    ("talk", "this is your quest journal. talk to the quest guide again"),
+    ("ladder", "it's time to enter some caves: go down the ladder"),
+    ("talk", "talk to the mining instructor"),
+    ("mine", "mine some tin"),
+    ("mine", "now that you have some tin ore, you just need some copper"),
+    ("smelt", "smelt the ores into a bronze bar at the furnace"),
+    ("talk", "you've made a bronze bar: speak to the mining instructor"),
+    ("anvil", "smithing a dagger: use the bar on the anvil, you need a hammer"),
+    ("smithing menu", "smithing menu: list of all the things you can make, select the dagger"),
+    ("door", "go through the gate shown by the arrow"),
+    ("talk", "speak to the combat instructor"),
+    ("tab", "equipping items: you now have access to a new interface. click on the flashing icon of a man"),
+    ("equipment stats", "worn inventory: view the equipment stats, shield and helmet"),
+    ("wield dagger", "equipment stats: wield the dagger"),
+    ("talk", "you're now holding your dagger: speak to the combat instructor"),
+    ("sword and shield", "unequip: wield the sword and shield"),
+    ("tab", "click on the flashing crossed swords icon to open the combat interface"),
+    ("talk", "combat interface: this is your combat interface, select the attack style. speak to the combat instructor"),
+    ("attack rat", "enter the cage through the gate and attack a rat"),
+    ("first kill", "you've made your first kill: pass through the gate and talk to the combat instructor"),
+    ("bow", "rat ranging: equip the shortbow and arrows, then attack a rat"),
+    ("ladder", "moving on: you have completed the tasks here. click on the indicated ladder"),
+    ("bank booth", "this is the bank of gielinor: click on the indicated booth"),
+    ("poll booth", "banking: this is your bank. you can store items here for safekeeping. deposit something, then the poll booth"),
+    ("door", "moving on: polls are run periodically to let the community vote on how the game should change. move on through the door"),
+    ("talk", "talk to the account guide"),
+    ("tab", "click on the flashing icon to open the account management menu"),
+    ("talk", "account management: this is your account management where you can control various aspects of your account. talk to the account guide"),
+    ("door", "continue through the next door"),
+    ("door", "exit the door and follow the path to the chapel. speak to brother brace"),
+    ("tab", "click on the flashing icon to open the prayer menu"),
+    ("talk", "talk with brother brace about prayers"),
+    ("door", "your final instructor: you're almost finished. pass through the door to find the path"),
+    ("walk to npc", "your final instructor: follow the path to the wizard's house and talk with the magic instructor"),
+    ("tab", "open up the magic interface by clicking on the flashing icon"),
+    ("talk", "this is your magic interface: talk to the magic instructor"),
+    ("magic: cast", "magic casting: cast wind strike on a chicken"),
+    ("mainland", "go to the mainland: speak with the magic instructor to continue"),
+    ("mainland", "go to the mainland: you're nearly finished. cast your home teleport spell to be taken to lumbridge"),
+]
+# steps OCR can name with certainty (generic ones - talk/door/walk - don't resync)
+SPECIFIC_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "dough", "bake", "run", "mine",
+                  "smelt", "anvil", "smithing menu", "equipment stats", "wield dagger", "sword and shield",
+                  "attack rat", "first kill", "bow", "bank booth", "poll booth", "magic: cast", "ladder"}
+
 # where to walk when the game gives no arrow: (instruction words, tile, label)
 # heading = minimap direction with north up (x right, y down), used while the tile can't be read
 WALK_TARGETS = [(("chapel", "brother brace"), (3125, 3108, 0), "the chapel", (-0.1, 1.0)),
@@ -422,7 +497,10 @@ class BotExecutor(HumanMixin, Bot):
                 self.camera.random_move((0.6, 1.4), 0.3)
             except Exception:
                 self.log.debug("camera move failed", exc_info=True)
-        name, handler = self._rule(low)
+        if self.cfg.scripted.value:
+            name, handler, low = self._script_step(low, new_text=(self.same == 0 and self.walks == 0))
+        else:
+            name, handler = self._rule(low)
         self.set_activity(name)
         self.log.info(f"Step '{name}' (try {self.same + 1})")
         self._walked = False
@@ -439,6 +517,113 @@ class BotExecutor(HumanMixin, Bot):
             self.maybe_alt_tab(lambda: None, name)
         # after a walk only a short look (then walk on); after an action wait for the result
         self._wait_change(key, 4.0 if self._walked else self.cfg.step_wait.value)
+
+    # ------------------------------------------------------------------ scripted mode
+    def _progress_file(self):
+        from pathlib import Path
+        from core import instance
+        return instance.config_dir(Path(__file__).resolve().parent.parent) / "tutorial_progress.json"
+
+    def _account(self) -> str:
+        try:
+            t = self.client.window.title or ""
+        except Exception:
+            t = ""
+        return t.replace("RuneLite - ", "").strip() or "unknown"
+
+    def _load_idx(self):
+        import json
+        try:
+            return json.loads(self._progress_file().read_text()).get(self._account())
+        except Exception:
+            return None
+
+    def _save_idx(self):
+        import json
+        f = self._progress_file()
+        try:
+            data = json.loads(f.read_text()) if f.exists() else {}
+        except Exception:
+            data = {}
+        data[self._account()] = self.idx
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(data, indent=1))
+        except Exception:
+            self.log.debug("couldn't save the tutorial progress", exc_info=True)
+
+    def _find_in_script(self, low: str, lo: int = 0, hi: int | None = None) -> int | None:
+        """The script entry an OCR'd instruction stands for: a specific step by its rule, a
+        talk/door/walk step by the NPC it names."""
+        hi = len(SCRIPT) if hi is None else min(hi, len(SCRIPT))
+        rule = self._rule(low)[0]
+        npc = next((n for w, n in NPC_WORDS if w in low), None)
+        for i in range(max(0, lo), hi):
+            name, canon = SCRIPT[i]
+            if name != rule:
+                continue
+            if rule in SPECIFIC_STEPS:
+                return i
+            cnpc = next((n for w, n in NPC_WORDS if w in canon), None)
+            if npc and cnpc == npc:
+                return i
+        return None
+
+    def _best_in_script(self, low: str) -> int | None:
+        """Where an account is when it starts without saved progress: the script entry whose
+        wording matches the OCR'd instruction best (the step name from the rules counts too)."""
+        rule = self._rule(low)[0]
+        best = None
+        for i, (name, canon) in enumerate(SCRIPT):
+            words = [w for w in re.findall(r"[a-z']+", canon) if len(w) >= 4]
+            if not words:
+                continue
+            score = sum(1 for w in words if has(low, w)) / len(words) + (0.25 if name == rule else 0)
+            if best is None or score > best[0]:
+                best = (score, i)
+        return best[1] if best and best[0] >= 0.45 else None
+
+    def _script_step(self, low: str, new_text: bool):
+        """(step name, handler, the text the handler gets). A new instruction moves one
+        entry on, unless OCR clearly names another step close by."""
+        rule = self._rule(low)[0]
+        if rule in ("waiting", "appearance"):
+            # "Please wait..." / the appearance screen: not an island step, don't move on
+            return rule, dict((n, h) for n, _c, h in self._rules_list())[rule], low
+        if has(low, "reach that", "can't reach", "cant reach"):
+            new_text = False  # the chat log, not an instruction
+        seen = getattr(self, "_seen_keys", None)
+        if seen is None:
+            seen = self._seen_keys = {}
+        if getattr(self, "idx", None) is None:
+            self.idx = self._load_idx()
+            found = self._best_in_script(low)
+            if found is None:
+                found = self._find_in_script(low)
+            if self.idx is None or (found is not None and abs(found - self.idx) > 3):
+                self.idx = found if found is not None else 0
+            self.log.info(f"Script: starting at step {self.idx + 1}/{len(SCRIPT)} ({SCRIPT[self.idx][0]})")
+            self._script_text = self._key(low)
+        elif new_text and self._key(low) in seen and seen[self._key(low)] >= self.idx - 2:
+            # a text seen a moment ago (the chat box and the top-left box take turns):
+            # back to the step it belonged to, no moving on
+            self._script_text = self._key(low)
+            self.idx = seen[self._key(low)]
+        elif new_text and self._key(low) != getattr(self, "_script_text", ""):
+            self._script_text = self._key(low)
+            nxt = min(self.idx + 1, len(SCRIPT) - 1)
+            found = self._find_in_script(low, self.idx - 2, self.idx + 7)
+            if found is not None and found != nxt and SCRIPT[found][0] != SCRIPT[nxt][0]:
+                self.log.info(f"Script: the text looks like step {found + 1} ({SCRIPT[found][0]}), "
+                              f"not {nxt + 1} ({SCRIPT[nxt][0]}): following the text")
+                nxt = found
+            self.idx = nxt
+            self._save_idx()
+        seen[self._key(low)] = self.idx
+        name, canon = SCRIPT[self.idx]
+        handler = dict((n, h) for n, _c, h in self._rules_list()).get(name, self.do_talk)
+        self.log.info(f"Script step {self.idx + 1}/{len(SCRIPT)}: {name} - {canon}")
+        return name, handler, canon
 
     def _key(self, low: str) -> str:
         """The instruction without OCR noise (for 'did it change?')."""
@@ -705,9 +890,22 @@ class BotExecutor(HumanMixin, Bot):
         return True
 
     # ================================================================== rules
+    def _rules_list(self):
+        """(name, condition, handler) of every rule, conditions on an empty text."""
+        return self._rule_table("")
+
     def _rule(self, t: str):
         """Which step the instruction asks for. OCR mixes up letters ("Iogs", "treo",
         "{con"), so every keyword is looked for fuzzily (has())."""
+        for name, cond, fn in self._rule_table(t):
+            try:
+                if cond():
+                    return name, fn
+            except Exception:
+                continue
+        return "talk", self.do_talk
+
+    def _rule_table(self, t: str):
         H = lambda *k: has(t, *k)
         R = [
             ("appearance", lambda: H("appearance") and H("character"), self.do_appearance),
@@ -749,13 +947,7 @@ class BotExecutor(HumanMixin, Bot):
             ("walk to npc", lambda: H("follow the path", "find the"), self.do_talk),
             ("talk", lambda: True, self.do_talk),
         ]
-        for name, cond, fn in R:
-            try:
-                if cond():
-                    return name, fn
-            except Exception:
-                continue
-        return "talk", self.do_talk
+        return R
 
     # ================================================================== actions
     def do_wait(self, t):
