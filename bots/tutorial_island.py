@@ -65,7 +65,7 @@ class BotConfig(BotConfigMixin):
     # The tutorial's hint arrow: yellow (hue), strongly coloured.
     hint_color: RGBParam = RGBParam(255, 255, 0)
     hint_hue_tol: IntParam = IntParam(8)
-    hint_min_pixels: IntParam = IntParam(40)       # in the game view
+    hint_min_pixels: IntParam = IntParam(150)      # in the game view (arrow ~250 px)
     hint_min_pixels_minimap: IntParam = IntParam(14)  # minimap arrow (NPC dots are ~4 px)
     # How far below the arrow's tip the mouse-over search goes (px).
     hint_search_depth: IntParam = IntParam(110)
@@ -201,9 +201,13 @@ def has(text: str, *keys: str) -> bool:
         kn = _norm(k)
         if kn in tn:
             return True
-        if len(kn) >= 5:
+        if len(kn) >= 5 and len(tn) >= len(kn) - 1:
             n = len(kn)
-            for i in range(0, max(1, len(tn) - n + 1)):
+            if len(tn) < n:
+                if SequenceMatcher(None, tn, kn).ratio() >= 0.8:
+                    return True
+                continue
+            for i in range(0, len(tn) - n + 1):
                 if tn[i] != kn[0] and tn[i + n - 1:i + n] != kn[-1:]:
                     continue
                 if SequenceMatcher(None, tn[i:i + n], kn).ratio() >= 0.8:
@@ -235,6 +239,8 @@ class BotExecutor(HumanMixin, Bot):
         self.same = 0
         self.unknown = 0
         self.steps = 0
+        self.walks = 0
+        self._walked = False
         self._tpl: dict[str, Image.Image] = {}
         self._mainland_asked = False
 
@@ -268,7 +274,18 @@ class BotExecutor(HumanMixin, Bot):
                     self.exit_reason = "done"
                     self.counts["done"] = 1
                     return
-                res = self._step()
+                try:
+                    res = self._step()
+                    self.errors = 0
+                except ScriptTerminationException:
+                    raise
+                except Exception:
+                    self.errors = getattr(self, "errors", 0) + 1
+                    self.log.error(f"Step error ({self.errors}/5)", exc_info=True)
+                    if self.errors >= 5:
+                        raise
+                    time.sleep(2)
+                    continue
                 if res == "stop":
                     return
                 self.control.propose_break()
@@ -310,8 +327,12 @@ class BotExecutor(HumanMixin, Bot):
         self.unknown = 0
         key = self._key(low)
         if key == self.last_text:
-            self.same += 1
+            if getattr(self, "_walked", False) and self.walks < 40:
+                self.walks += 1  # still on the way there: not a failed try
+            else:
+                self.same += 1
         else:
+            self.walks = 0
             if self.last_text:
                 self.steps += 1
                 self.counts["steps"] = self.steps
@@ -335,20 +356,22 @@ class BotExecutor(HumanMixin, Bot):
         name, handler = self._rule(low)
         self.set_activity(name)
         self.log.info(f"Step '{name}' (try {self.same + 1})")
+        self._walked = False
         try:
             handler(low)
         except ScriptTerminationException:
             raise
         except Exception:
             self.log.warning(f"Step '{name}' failed", exc_info=True)
-        self._wait_change(key)
+        # after a walk only a short look (then walk on); after an action wait for the result
+        self._wait_change(key, 4.0 if self._walked else self.cfg.step_wait.value)
 
     def _key(self, low: str) -> str:
         """The instruction without OCR noise (for 'did it change?')."""
         return re.sub(r"[^a-z]", "", low)[:90]
 
-    def _wait_change(self, key: str):
-        end = time.time() + self.cfg.step_wait.value
+    def _wait_change(self, key: str, timeout: float):
+        end = time.time() + timeout
         while time.time() < end and not self.terminate:
             self.sleep_checked(self.cfg.read_every.choose())
             low = self.read_chat().lower()
@@ -377,9 +400,15 @@ class BotExecutor(HumanMixin, Bot):
         self._chat_lines = self._chat_lines_box
         if self._is_dialogue(chat.lower()):
             return chat
-        over = self._ocr_region(sc, OVERLAY_BOX, "overlay")
+        self._ocr_region(sc, OVERLAY_BOX, "overlay")
+        # the World Location panel (Tile / Chunk ID / Region ID, white) sits in the same
+        # corner when there is no instruction box: drop its lines and number-only lines
+        keep = [l for l in getattr(self, "_lines_overlay", [])
+                if not has(l["text"], "chunk", "region", "tile")
+                and len(re.sub(r"[^a-zA-Z]", "", l["text"])) >= 4]
+        over = " ".join(l["text"] for l in keep)
         if len(re.sub(r"[^a-z]", "", over.lower())) >= 20:
-            self._chat_lines = getattr(self, "_lines_overlay", [])
+            self._chat_lines = keep
             return over
         return chat
 
@@ -911,19 +940,32 @@ class BotExecutor(HumanMixin, Bot):
         """The yellow hint arrow in the game view (biggest yellow blob)."""
         sc = sc or self.client.get_screenshot()
         x1, y1, x2, y2 = VIEW
-        mask = hue_mask(sc.crop(VIEW), self.cfg.hint_color.value, self.cfg.hint_hue_tol.value, 90, 190)
+        # the arrow is pure yellow (255,255,~60); gold door frames etc. stay below ~200
+        mask = hue_mask(sc.crop(VIEW), self.cfg.hint_color.value, 4, 150, 235)
+        # under the dark instruction box (top-left) it is dimmed to ~half
+        ox1, oy1, ox2, oy2 = OVERLAY_BOX
+        hsv = cv2.cvtColor(np.asarray(sc.convert("RGB").crop((ox1, oy1, ox2, oy2))), cv2.COLOR_RGB2HSV)
+        dim = (np.abs(hsv[:, :, 0].astype(np.int16) - 27) <= 4) & (hsv[:, :, 1] >= 90) & \
+              (hsv[:, :, 2] >= 75) & (hsv[:, :, 2] <= 140)
+        mask[oy1 - y1:oy2 - y1, ox1 - x1:ox2 - x1] |= dim[: oy2 - oy1, : ox2 - ox1]
+        raw = mask
         mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
-        num, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        num, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         best = None
         for i in range(1, num):
             x, y, w, h, area = (int(v) for v in stats[i])
             if area < self.cfg.hint_min_pixels.value or w < 6 or h < 10 or w > 90 or h > 90:
                 continue
+            # the arrow is a solid shape (~40% of its box yellow); door/window frames are
+            # thin outlines (10-25%)
+            fill = float((raw[y:y + h, x:x + w] & (lab[y:y + h, x:x + w] == i)).sum()) / (w * h)
+            if fill < 0.3:
+                continue
             if w > 1.8 * h:
                 continue  # a word (the mouse-over text, yellow item names), not the arrow
             ax, ay = x1 + x, y1 + y
-            if ay < 26 or (ax < 175 and ay < 75):
-                continue  # RuneLite's mouse-over line and the World Location panel
+            if ay < 24:
+                continue  # RuneLite's mouse-over line
             if best is None or area > best[0]:
                 best = (area, MatchResult(x1 + x, y1 + y, x1 + x + w, y1 + y + h))
         return best[1] if best else None
@@ -1007,6 +1049,7 @@ class BotExecutor(HumanMixin, Bot):
             self.log.info(f"Hint arrow at {hint.bounding_box}: nothing {wanted} under it")
             # far away: walk to it
             self.client.click((cx + random.randint(-5, 5), min(VIEW[3] - 2, hint.end_y + random.randint(25, 45))))
+            self._walked = True
             self.sleep_checked(random.uniform(2.0, 3.5))
             return False
         if search:
@@ -1046,6 +1089,7 @@ class BotExecutor(HumanMixin, Bot):
         if hint is not None:
             cx = (hint.start_x + hint.end_x) // 2
             self.client.click((cx + random.randint(-6, 6), min(VIEW[3] - 2, hint.end_y + random.randint(25, 45))))
+            self._walked = True
             self.sleep_checked(random.uniform(2.5, 4.0))
             return True
         mh = self.find_minimap_hint()
@@ -1061,6 +1105,7 @@ class BotExecutor(HumanMixin, Bot):
         pt = (int(cx + dx * k + random.uniform(-3, 3)), int(cy + dy * k + random.uniform(-3, 3)))
         self.log.info(f"Walking toward the minimap hint arrow ({pt})")
         self.client.click(pt)
+        self._walked = True
         self.sleep_checked(random.uniform(3.0, 5.0))
         return True
 
