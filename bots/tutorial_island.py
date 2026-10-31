@@ -633,7 +633,7 @@ class BotExecutor(HumanMixin, Bot):
         R = [
             ("appearance", lambda: H("appearance") and H("character"), self.do_appearance),
             ("waiting", lambda: H("please wait", "sit back", "attempting to", "bar over your head"), self.do_wait),
-            ("tab", lambda: (H("flashing") and not H("arrow")) or H("open up the magic"), self.do_tab),
+            ("tab", lambda: (H("flashing") and not H("arrow", "yellow", "indicated")) or H("open up the magic"), self.do_tab),
             ("go on", lambda: H("want a recap"), self.do_path),
             ("magic: cast", lambda: H("wind strike", "magic casting", "now have some runes", "runes to cast", "on a chicken"),
              self.do_wind_strike),
