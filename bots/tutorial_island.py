@@ -648,7 +648,7 @@ class BotExecutor(HumanMixin, Bot):
             ("dough", lambda: H("dough") and H("flour", "mix"), self.do_dough),
             ("bake", lambda: H("range") and H("bread", "dough", "bake"), self.do_range),
             ("smithing menu", lambda: H("smithing menu", "list of all the things"), self.do_dagger_menu),
-            ("anvil", lambda: H("anvil") and H("hammer"), self.do_anvil),
+            ("anvil", lambda: (H("anvi") and H("hamme", "bars")) or H("smithing a dagger"), self.do_anvil),
             ("smelt", lambda: H("smelt") and H("furnace"), self.do_smelt),
             ("mine", lambda: H("mine", "mining") and H("tin", "copper", "rock", "some tn") and not H("bronze bar"),
              self.do_mine),
