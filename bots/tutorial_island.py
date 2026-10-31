@@ -638,7 +638,7 @@ class BotExecutor(HumanMixin, Bot):
             ("magic: cast", lambda: H("wind strike", "magic casting", "now have some runes", "runes to cast", "on a chicken"),
              self.do_wind_strike),
             ("mainland", lambda: H("mainland"), self.do_mainland),
-            ("fishing", lambda: H("fishing spot", "catch some shrimp", "to catch", "the net"), self.do_fish),
+            ("fishing", lambda: H("fishing spot", "catch some shrimp", "to catch", "fishing net"), self.do_fish),
             ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "nearby tree", "chop"),
              self.do_chop),
             ("firemaking", lambda: H("tinderbox", "light a fire"), self.do_fire),
