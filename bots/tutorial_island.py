@@ -105,7 +105,9 @@ CHAT_BOX = (0, 338, 520, 476)
 ALT_TAB_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "bake", "mine", "smelt",
                  "anvil", "smithing menu", "attack rat", "bow", "magic: cast", "waiting"}
 # where to walk when the game gives no arrow: (instruction words, tile, label)
-WALK_TARGETS = [(("chapel", "brother brace"), (3125, 3108, 0), "the chapel")]
+# heading = minimap direction with north up (x right, y down), used while the tile can't be read
+WALK_TARGETS = [(("chapel", "brother brace"), (3125, 3108, 0), "the chapel", (-0.1, 1.0))]
+COMPASS = (563, 21)  # compass orb (window coords): a click turns the camera north
 DAGGER_CELL = (28, 52, 86, 94)  # first cell of the smithing menu (window coords)
 # never clicked even when the fuzzy match says yes ("Cast Minigame Teleport" ~ "Cast Home Teleport")
 HOVER_NEVER = ("minigame",)
@@ -772,13 +774,26 @@ class BotExecutor(HumanMixin, Bot):
         # places the game shows no arrow for (from the account building to the chapel
         # there was none: two runs got stuck there with "I can't reach that!"): walk by
         # world tile (World Location panel)
-        for words, tile, label in WALK_TARGETS:
+        for words, tile, label, heading in WALK_TARGETS:
             if has(t, *words):
                 here = self.my_tile()
                 if here is not None and math.hypot(here[0] - tile[0], here[1] - tile[1]) > 4:
                     self.log.info(f"Walking to {label} by tile {tile} (from {here})")
                     self.walk_to_tile(tile, tol=3, label=label)
                     self._walked = True
+                    return
+                if here is None and self.same < 4:
+                    # the instruction box covers the World Location panel: face north
+                    # (compass click) and click the minimap the known way
+                    self.client.click((COMPASS[0] + random.randint(-4, 4), COMPASS[1] + random.randint(-4, 4)))
+                    time.sleep(random.uniform(0.6, 1.0))
+                    d = (MINIMAP_R - 14) * random.uniform(0.8, 1.0)
+                    ang = math.atan2(heading[1], heading[0]) + math.radians(random.uniform(-10, 10))
+                    pt = (int(MINIMAP_C[0] + d * math.cos(ang)), int(MINIMAP_C[1] + d * math.sin(ang)))
+                    self.log.info(f"No tile readable: heading to {label} by the minimap ({pt}, north up)")
+                    self.client.click(pt)
+                    self._walked = True
+                    self.sleep_checked(random.uniform(5, 7))
                     return
         if not self.walk_to_hint():
             if has(t, "speak to", "talk to") and self.walk_to_minimap_npc():
@@ -1291,11 +1306,21 @@ class BotExecutor(HumanMixin, Bot):
 
     def find_minimap_hint(self, sc=None, looks: int = 4) -> tuple[float, float] | None:
         """The minimap arrow flashes too: a few looks."""
-        for k in range(looks):
+        yellows = []
+        for k in range(max(looks, 4)):
             p = self._find_minimap_hint_once(sc if k == 0 else None)
-            if p is not None:
-                return p
+            if p is not None and p[0] == "red":
+                return p[2]
+            yellows.append(p)
             time.sleep(random.uniform(0.15, 0.25))
+        # a yellow blob counts only when it flashes (gone or a different size in some
+        # look): the bank icon is a steady yellow blob as big as the arrow
+        seen = [y for y in yellows if y is not None]
+        if seen and (len(seen) < len(yellows) or max(y[1] for y in seen) - min(y[1] for y in seen) > 8):
+            big = max(seen, key=lambda y: y[1])
+            return big[2]
+        if seen:
+            self.log.debug(f"Steady yellow blob on the minimap at {seen[0][2]} ({seen[0][1]} px): a map icon")
         return None
 
     def _find_minimap_hint_once(self, sc=None) -> tuple[float, float] | None:
@@ -1314,11 +1339,11 @@ class BotExecutor(HumanMixin, Bot):
         # icons - the bank's - are as big as the yellow arrow and sent the character to
         # the bank instead of the chapel)
         best = self._best_minimap_blob(red, box, self.cfg.hint_min_pixels_minimap.value, None)
-        if best is None:
-            best = self._best_minimap_blob(yellow, box, 22, None)
         if best:
-            self.log.debug(f"Minimap hint at {best[1]} ({best[0]} px)")
-        return best[1] if best else None
+            self.log.debug(f"Minimap hint (red) at {best[1]} ({best[0]} px)")
+            return ("red", best[0], best[1])
+        best = self._best_minimap_blob(yellow, box, 22, None)
+        return ("yellow", best[0], best[1]) if best else None
 
     def _best_minimap_blob(self, mask, box, min_px, best):
         num, _, stats, cent = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
