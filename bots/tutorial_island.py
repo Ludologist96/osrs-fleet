@@ -72,7 +72,7 @@ class BotConfig(BotConfigMixin):
 
     # --- dialogue: options picked in this order (lower case, part of the line) ---
     option_prefs: StringListParam = StringListParam([
-        "experienced player", "yes.", "not planning", "i'm fine", "fine, thanks", "yes",
+        "experienced player", "yes.", "not planning", "i'm fine", "fine, thanks", "move on", "nope", "yes",
     ])
     # never picked (ironman modes)
     option_never: StringListParam = StringListParam([
@@ -433,6 +433,12 @@ class BotExecutor(HumanMixin, Bot):
         self._chat_lines = self._chat_lines_box
         if self._is_dialogue(chat.lower()):
             return chat
+        # the parchment instruction box has a blue title; when it's there it is the current
+        # step (the top-left box can stay on an older, general text)
+        a = np.asarray(sc.convert("RGB").crop((10, 340, 510, 400)), dtype=np.int16)
+        blue = int(((a[:, :, 2] > 180) & (a[:, :, 0] < 80) & (a[:, :, 1] < 80)).sum())
+        if blue >= 80 and len(re.sub(r"[^a-z]", "", chat.lower())) >= 30:
+            return chat
         self._ocr_region(sc, OVERLAY_BOX, "overlay")
         # the World Location panel (Tile / Chunk ID / Region ID, white) sits in the same
         # corner when there is no instruction box: drop its lines and number-only lines
@@ -513,7 +519,9 @@ class BotExecutor(HumanMixin, Bot):
         return bool(self.CONTINUE_RE.search(low.strip()))
 
     def _options(self, low: str) -> bool:
-        return bool(self.OPTION_RE.search(low))
+        # the "Select an Option" header is sometimes lost by OCR; instructors' menus all
+        # offer "Tell me about ... again" lines
+        return bool(self.OPTION_RE.search(low)) or (has(low, "tell me about") and has(low, "again"))
 
     def _is_dialogue(self, low: str) -> bool:
         return self._continue(low) or self._options(low)
@@ -537,9 +545,11 @@ class BotExecutor(HumanMixin, Bot):
 
     def _choose_option(self) -> bool:
         ls = getattr(self, "_chat_lines", [])
-        idx = next((i for i, l in enumerate(ls) if self._options(l["text"].lower())), None)
+        idx = next((i for i, l in enumerate(ls) if self.OPTION_RE.search(l["text"].lower())), None)
         if idx is None:
-            return False
+            if not any(has(l["text"], "tell me about") for l in ls):
+                return False
+            idx = -1  # no header read: every line is an option
         options = [l for l in ls[idx + 1:] if len(l["text"].strip()) > 1][:5]
         texts = [o["text"].lower() for o in options]
         never = [n.lower() for n in self.cfg.option_never.value]
@@ -599,7 +609,7 @@ class BotExecutor(HumanMixin, Bot):
             ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
             ("poll booth", lambda: H("poll booth") and not H("door"), self.do_poll),
             ("ladder", lambda: H("ladder", "enter some caves", "go down to", "indicated ladder"), self.do_ladder),
-            ("door", lambda: H("door", "gate", "pass through", "continue through"), self.do_path),
+            ("door", lambda: H("door", "gate", "pass through", "continue through", "shown by the arrow"), self.do_path),
             ("walk to npc", lambda: H("follow the path", "find the"), self.do_talk),
             ("talk", lambda: True, self.do_talk),
         ]
@@ -726,14 +736,23 @@ class BotExecutor(HumanMixin, Bot):
         self.do_path(t)
 
     def do_mine(self, t):
-        # "First up, try mining some tin" / "...you just need some copper"
-        if "need some copper" in t:
-            ore = "copper"
-        elif "need some tin" in t:
-            ore = "tin"
-        else:
-            ore = "tin" if "tin" in t else "copper"
-        if self.hint_interact([f"Mine {ore.title()} rocks", f"Mine {ore.title()}", "Mine Rocks"], search=True):
+        # the box says "mine tin, then copper" the whole time: go by the inventory
+        self.ensure_tab("inventory")
+        if self._inv_item("Bronze dagger", 0.97) is not None:
+            self.log.info("Dagger made already: moving on")
+            self.do_path(t)
+            return
+        if self._inv_item("Bronze bar", 0.97) is not None:
+            self.log.info("Bronze bar in the inventory: smithing")
+            self.do_anvil(t)
+            return
+        tin, copper = self._inv_item("Tin ore", 0.97) is not None, self._inv_item("Copper ore", 0.97) is not None
+        if tin and copper:
+            self.log.info("Both ores in the inventory: smelting")
+            self.do_smelt(t)
+            return
+        ore = "copper" if tin else "tin"
+        if self.hint_interact([f"Mine {ore.title()} rocks"], search=True):
             self.sleep_checked(random.uniform(3, 5))
 
     def do_smelt(self, t):
@@ -1020,7 +1039,16 @@ class BotExecutor(HumanMixin, Bot):
                 best = (mx, MatchResult(x + 3, y + 2, x + HINT_ARROW.shape[1] - 3, y + HINT_ARROW.shape[0] - 2))
         return best[1] if best else None
 
-    def find_minimap_hint(self, sc=None) -> tuple[float, float] | None:
+    def find_minimap_hint(self, sc=None, looks: int = 4) -> tuple[float, float] | None:
+        """The minimap arrow flashes too: a few looks."""
+        for k in range(looks):
+            p = self._find_minimap_hint_once(sc if k == 0 else None)
+            if p is not None:
+                return p
+            time.sleep(random.uniform(0.15, 0.25))
+        return None
+
+    def _find_minimap_hint_once(self, sc=None) -> tuple[float, float] | None:
         sc = sc or self.client.get_screenshot()
         box = (MINIMAP_C[0] - MINIMAP_R, MINIMAP_C[1] - MINIMAP_R, MINIMAP_C[0] + MINIMAP_R, MINIMAP_C[1] + MINIMAP_R)
         # the minimap arrow is red (seen on the island; ground items are 2-3 px red dots),
@@ -1037,8 +1065,8 @@ class BotExecutor(HumanMixin, Bot):
         for i in range(1, num):
             area = int(stats[i][4])
             px, py = box[0] + float(cent[i][0]), box[1] + float(cent[i][1])
-            if math.hypot(px - cx, py - cy) > r:
-                continue  # outside the round map (orbs, compass)
+            if math.hypot(px - cx, py - cy) > r or math.hypot(px - cx, py - cy) < 9:
+                continue  # outside the round map (orbs, compass) / the character itself
             if area >= self.cfg.hint_min_pixels_minimap.value and (best is None or area > best[0]):
                 best = (area, (px, py))
         if best:
@@ -1131,8 +1159,9 @@ class BotExecutor(HumanMixin, Bot):
         if search:
             # off screen but the minimap points to it: walk there first (searching the
             # screen with the mouse is slow)
-            if self.find_minimap_hint() is not None:
-                self.walk_to_hint()
+            mh = self.find_minimap_hint()
+            if mh is not None:
+                self.walk_to_hint(mh)
                 return False
             return self.hover_search(wanted)
         return False
@@ -1205,16 +1234,21 @@ class BotExecutor(HumanMixin, Bot):
                     return True
         return False
 
-    def walk_to_hint(self) -> bool:
+    def walk_to_hint(self, mh=None) -> bool:
         """No arrow on screen: walk toward the minimap's hint arrow."""
-        hint = self.find_hint()
+        hint = None if mh is not None else self.find_hint()
         if hint is not None:
             cx = (hint.start_x + hint.end_x) // 2
             self.client.click((cx + random.randint(-6, 6), min(VIEW[3] - 2, hint.end_y + random.randint(25, 45))))
             self._walked = True
             self.sleep_checked(random.uniform(2.5, 4.0))
             return True
-        mh = self.find_minimap_hint()
+        for _ in range(4):  # it flashes too
+            if mh is not None:
+                break
+            mh = self.find_minimap_hint()
+            if mh is None:
+                time.sleep(random.uniform(0.15, 0.25))
         if mh is None:
             self.log.info("No hint arrow on the screen or the minimap")
             return False
@@ -1266,8 +1300,37 @@ class BotExecutor(HumanMixin, Bot):
         if self.click_npc(wanted, search=False):
             self.sleep_checked(random.uniform(1.2, 2.5))
             return True
-        self.walk_to_hint()
+        if not self.walk_to_hint():
+            self.walk_to_minimap_npc()
         return False
+
+    def walk_to_minimap_npc(self) -> bool:
+        """No arrow anywhere: NPC Indicators also marks the highlighted NPCs on the minimap
+        (cyan dots) - walk toward the nearest group of them."""
+        sc = self.client.get_screenshot().convert("RGB")
+        x0, y0 = MINIMAP_C[0] - MINIMAP_R, MINIMAP_C[1] - MINIMAP_R
+        crop = sc.crop((x0, y0, MINIMAP_C[0] + MINIMAP_R, MINIMAP_C[1] + MINIMAP_R))
+        m = hue_mask(crop, (0, 255, 255), 8, 150, 150)
+        ys, xs = np.nonzero(m)
+        pts = [(x0 + x, y0 + y) for x, y in zip(xs.tolist(), ys.tolist())
+               if 8 < math.hypot(x0 + x - MINIMAP_C[0], y0 + y - MINIMAP_C[1]) < MINIMAP_R - 2]
+        if not pts:
+            self.log.info("No highlighted NPC on the minimap either")
+            try:
+                self.camera.rotate(random.uniform(0.8, 1.3))
+            except Exception:
+                pass
+            return False
+        tx, ty = min(pts, key=lambda p: math.hypot(p[0] - MINIMAP_C[0], p[1] - MINIMAP_C[1]))
+        dx, dy = tx - MINIMAP_C[0], ty - MINIMAP_C[1]
+        d = math.hypot(dx, dy)
+        k = min(1.0, (MINIMAP_R - 12) / d)
+        pt = (int(MINIMAP_C[0] + dx * k + random.uniform(-2, 2)), int(MINIMAP_C[1] + dy * k + random.uniform(-2, 2)))
+        self.log.info(f"Walking toward a highlighted NPC on the minimap ({pt})")
+        self.client.click(pt)
+        self._walked = True
+        self.sleep_checked(random.uniform(3.0, 5.0))
+        return True
 
     # ------------------------------------------------------------------ combat
     def opponent_bar(self):
