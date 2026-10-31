@@ -106,7 +106,10 @@ ALT_TAB_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "bake", 
                  "anvil", "smithing menu", "attack rat", "bow", "magic: cast", "waiting"}
 # where to walk when the game gives no arrow: (instruction words, tile, label)
 # heading = minimap direction with north up (x right, y down), used while the tile can't be read
-WALK_TARGETS = [(("chapel", "brother brace"), (3125, 3108, 0), "the chapel", (-0.1, 1.0))]
+WALK_TARGETS = [(("chapel", "brother brace"), (3125, 3108, 0), "the chapel", (-0.1, 1.0)),
+                # the magic instructor stands outside the wizard's house, SE of the chapel;
+                # the minimap NPC dots near the chapel led back north (run 2)
+                (("final instructor", "wizard", "magic instructor"), (3140, 3089, 0), "the magic instructor", (0.6, 1.0))]
 COMPASS = (563, 21)  # compass orb (window coords): a click turns the camera north
 DAGGER_CELL = (28, 52, 86, 94)  # first cell of the smithing menu (window coords)
 # never clicked even when the fuzzy match says yes ("Cast Minigame Teleport" ~ "Cast Home Teleport")
@@ -759,6 +762,10 @@ class BotExecutor(HumanMixin, Bot):
         self.click_flashing_tab()
 
     def do_talk(self, t):
+        if t and any(has(t, *w) for w, *_ in WALK_TARGETS) and has(t, "follow the path", "find the", "chapel"):
+            # no arrow to these: walk there first (do_path talks once the NPC is in sight)
+            if not self.find_npcs() or self.same >= 2:
+                return self.do_path(t)
         npc = None
         for w, n in NPC_WORDS:
             if w in t:
