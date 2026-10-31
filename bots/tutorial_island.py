@@ -587,7 +587,8 @@ class BotExecutor(HumanMixin, Bot):
         words = [re.sub(r"[^a-z]", "", l["text"].lower()) for l in ls]
         if any(w.endswith("yes") and len(w) <= 6 for w in words) and len(ls) <= 5:
             return True
-        return any(has(l["text"], "not planning", "iron man", "ironman") for l in ls) and len(ls) <= 5
+        return any(has(l["text"], "not planning", "iron man", "ironman", "i'm not", "not todo", "not to do",
+                       "want to become", "become an") for l in ls) and len(ls) <= 6
 
     def _is_dialogue(self, low: str) -> bool:
         return self._continue(low) or self._options(low)
@@ -598,7 +599,10 @@ class BotExecutor(HumanMixin, Bot):
         # right after picking an option the character says it ("Nope, I'm ready to move
         # on!") - a dialogue line even when OCR loses its "Click here to continue"
         opt = getattr(self, "_last_option", "")
-        if opt and not getattr(self, "_from_overlay", False) and tools.text_similarity(re.sub(r"[^a-z ]", "", low)[:len(opt) + 6], opt) > 0.6:
+        plain = re.sub(r"[^a-z ]", "", low).strip()
+        if opt and not getattr(self, "_from_overlay", False) and len(plain) <= len(opt) + 30 \
+                and len(getattr(self, "_chat_lines_box", []) or []) <= 3 \
+                and tools.text_similarity(plain[:len(opt) + 6], opt) > 0.6:
             self._last_option = ""
             time.sleep(self.cfg.continue_pause.choose())
             keyboard.press_and_release("space")
