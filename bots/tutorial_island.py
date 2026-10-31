@@ -66,17 +66,18 @@ class BotConfig(BotConfigMixin):
     hint_color: RGBParam = RGBParam(255, 255, 0)
     hint_hue_tol: IntParam = IntParam(8)
     hint_min_pixels: IntParam = IntParam(150)      # in the game view (arrow ~250 px)
-    hint_min_pixels_minimap: IntParam = IntParam(30)  # minimap arrow (NPC dots are ~4 px)
+    hint_min_pixels_minimap: IntParam = IntParam(40)  # minimap arrow (NPC dots are ~4 px)
     # How far below the arrow's tip the mouse-over search goes (px).
     hint_search_depth: IntParam = IntParam(110)
 
     # --- dialogue: options picked in this order (lower case, part of the line) ---
     option_prefs: StringListParam = StringListParam([
-        "experienced player", "yes.", "not planning", "i'm fine", "fine, thanks", "move on", "nope", "yes",
+        "experienced player", "yes.", "not planning", "i'm not", "not to do", "i'm fine", "fine, thanks",
+        "move on", "nope", "yes",
     ])
     # never picked (ironman modes)
     option_never: StringListParam = StringListParam([
-        "become an iron", "change my iron", "tell me about iron", "what's an iron",
+        "iron",  # every ironman line ("Yes, I do want to become an Ironman", "Tell me about...")
     ])
 
     # --- pacing ---
@@ -109,9 +110,15 @@ class BotConfig(BotConfigMixin):
 
 # Fixed layout, window coords (= canvas coords on the fleet).
 CHAT_BOX = (0, 338, 520, 476)
+# never clicked even when the fuzzy match says yes ("Cast Minigame Teleport" ~ "Cast Home Teleport")
+HOVER_NEVER = ("minigame",)
 SIDE_PANEL = (548, 205, 740, 465)
 TAB_ROWS = ((527, 168, 765, 204), (527, 466, 765, 502))  # 7 tabs of 34 px (measured)
 TAB_W = 34
+# (column, row) of each tab in the fixed layout (row 0 = top, 1 = bottom)
+TAB_POS = {"combat": (0, 0), "skills": (1, 0), "quests": (2, 0), "inventory": (3, 0), "equipment": (4, 0),
+           "prayer": (5, 0), "spells": (6, 0), "account": (2, 1), "friends": (1, 1), "logout": (3, 1),
+           "settings": (4, 1), "emotes": (5, 1), "music": (6, 1)}
 VIEW = (4, 4, 512, 334)  # game view
 OVERLAY_BOX = (4, 22, 330, 160)
 HOVER_LINE = (4, 4, 360, 24)
@@ -227,14 +234,15 @@ def _norm(x: str) -> str:
 
 def has(text: str, *keys: str) -> bool:
     """Any of `keys` in `text`, tolerating OCR letter mistakes (keys of 5+ letters
-    match a same-length piece of the text at 80%)."""
+    match a same-length piece of the text at 80%; shorter ones must be there exactly,
+    or "range" would match "change")."""
     from difflib import SequenceMatcher
     tn = _norm(text)
     for k in keys:
         kn = _norm(k)
         if kn in tn:
             return True
-        if len(kn) >= 5 and len(tn) >= len(kn) - 1:
+        if len(kn) >= 7 and len(tn) >= len(kn) - 1:
             n = len(kn)
             if len(tn) < n:
                 if SequenceMatcher(None, tn, kn).ratio() >= 0.8:
@@ -431,15 +439,17 @@ class BotExecutor(HumanMixin, Bot):
         top-left of the game view with yellow/white text. A dialogue in the chat box wins;
         otherwise the overlay when it has text, else the chat box."""
         sc = sc or self.client.get_screenshot()
+        self._from_overlay = False
         chat = self._ocr_region(sc, self._chat_box(), "chat")
         self._chat_lines_box = getattr(self, "_lines_chat", [])
         self._chat_lines = self._chat_lines_box
-        if self._is_dialogue(chat.lower()):
-            return chat
         # the parchment instruction box has a blue title; when it's there it is the current
         # step (the top-left box can stay on an older, general text)
         a = np.asarray(sc.convert("RGB").crop((10, 340, 510, 400)), dtype=np.int16)
         blue = int(((a[:, :, 2] > 180) & (a[:, :, 0] < 80) & (a[:, :, 1] < 80)).sum())
+        self._blue_title = blue >= 80
+        if self._is_dialogue(chat.lower()):
+            return chat
         if blue >= 80 and len(re.sub(r"[^a-z]", "", chat.lower())) >= 30:
             return chat
         self._ocr_region(sc, OVERLAY_BOX, "overlay")
@@ -451,6 +461,7 @@ class BotExecutor(HumanMixin, Bot):
         over = " ".join(l["text"] for l in keep)
         if len(re.sub(r"[^a-z]", "", over.lower())) >= 20:
             self._chat_lines = keep
+            self._from_overlay = True
             return over
         return chat
 
@@ -518,13 +529,35 @@ class BotExecutor(HumanMixin, Bot):
     CONTINUE_RE = re.compile(r"(click|here|tap) (here )?t[o0] c[o0]n?t|t[o0] c[o0]nt[il1]?nu|c[o0]nt[il1]?nue$")
     OPTION_RE = re.compile(r"select an? [o0]pt|select an?\b")
 
+    STRONG_CONTINUE_RE = re.compile(r"(click|here|tap) (here )?t[o0] c[o0]")
+
     def _continue(self, low: str) -> bool:
-        return bool(self.CONTINUE_RE.search(low.strip()))
+        if getattr(self, "_from_overlay", False):
+            return False  # dialogues are always in the chat box
+        if not self.CONTINUE_RE.search(low.strip()):
+            return False
+        # an instruction can end "...speak with the magic instructor to continue": the
+        # instruction box has a blue title at the top, a dialogue doesn't
+        if getattr(self, "_blue_title", False) and not self.STRONG_CONTINUE_RE.search(low):
+            return False
+        return True
 
     def _options(self, low: str) -> bool:
-        # the "Select an Option" header is sometimes lost by OCR; instructors' menus all
-        # offer "Tell me about ... again" lines
-        return bool(self.OPTION_RE.search(low)) or (has(low, "tell me about") and has(low, "again"))
+        # the "Select an Option" header (dark red) is often lost by OCR; instructors' menus
+        # all offer "Tell me about ... again" lines; the mainland menu has "Yes." / "No."
+        if getattr(self, "_from_overlay", False):
+            return False
+        return bool(self.OPTION_RE.search(low)) or (has(low, "tell me about") and has(low, "again")) \
+            or self._short_option_menu()
+
+    def _short_option_menu(self) -> bool:
+        ls = getattr(self, "_chat_lines_box", []) or []
+        if any(self.CONTINUE_RE.search(l["text"].lower()) for l in ls):
+            return False  # an NPC line ("...ask the Ironman tutor... Click here to continue")
+        words = [re.sub(r"[^a-z]", "", l["text"].lower()) for l in ls]
+        if any(w.endswith("yes") and len(w) <= 6 for w in words) and len(ls) <= 5:
+            return True
+        return any(has(l["text"], "not planning", "iron man", "ironman") for l in ls) and len(ls) <= 5
 
     def _is_dialogue(self, low: str) -> bool:
         return self._continue(low) or self._options(low)
@@ -532,6 +565,13 @@ class BotExecutor(HumanMixin, Bot):
     def _dialogue(self, low: str, sc) -> bool:
         if self._options(low):
             return self._choose_option()
+        # "Click here to continue" is blue at the bottom of the chat box (OCR sometimes
+        # loses the words; the instruction box only has its blue title at the top)
+        a = np.asarray(sc.convert("RGB").crop((60, 445, 460, 472)), dtype=np.int16)
+        blue_bottom = int(((a[:, :, 2] > 170) & (a[:, :, 0] < 70) & (a[:, :, 1] < 70)).sum())
+        if blue_bottom >= 40 and not self._continue(low):
+            self.log.debug(f"Blue 'continue' line seen ({blue_bottom} px)")
+            low = low + " click here to continue"
         if self._continue(low):
             time.sleep(self.cfg.continue_pause.choose())
             keyboard.press_and_release("space")
@@ -550,7 +590,7 @@ class BotExecutor(HumanMixin, Bot):
         ls = getattr(self, "_chat_lines", [])
         idx = next((i for i, l in enumerate(ls) if self.OPTION_RE.search(l["text"].lower())), None)
         if idx is None:
-            if not any(has(l["text"], "tell me about") for l in ls):
+            if not any(has(l["text"], "tell me about") for l in ls) and not self._short_option_menu():
                 return False
             idx = -1  # no header read: every line is an option
         options = [l for l in ls[idx + 1:] if len(l["text"].strip()) > 1][:5]
@@ -565,15 +605,28 @@ class BotExecutor(HumanMixin, Bot):
                     break
             if pick is not None:
                 break
+        if pick is None and idx == -1 and not any(has(t, "tell me about") for t in texts):
+            self.log.info(f"Options without a header and none I know: {[o['text'] for o in options]}")
+            return False
         if pick is None:
             pick = next((i for i, t in enumerate(texts) if not any(n in t for n in never)), 0)
         self.log.info(f"Options {[o['text'] for o in options]}: choosing {pick + 1}")
         time.sleep(self.cfg.continue_pause.choose())
-        if random.random() < 0.5:
+        if idx >= 0 and random.random() < 0.5:  # (without the header the number may be off)
             keyboard.press_and_release(str(pick + 1))
         else:
             self._click_box(options[pick])
         time.sleep(random.uniform(0.4, 0.8))
+        # the menu stays up a moment: don't read it again as an instruction (that made the
+        # bot talk to the instructor again and restart the mainland dialogue)
+        before = self._key(" ".join(texts))
+        end = time.time() + 4
+        while time.time() < end:
+            self.read_chat()
+            now = self._key(" ".join(l["text"].lower() for l in getattr(self, "_chat_lines_box", [])))
+            if now and tools.text_similarity(now, before) < 0.6:
+                break
+            time.sleep(random.uniform(0.3, 0.5))
         return True
 
     # ================================================================== rules
@@ -586,7 +639,8 @@ class BotExecutor(HumanMixin, Bot):
             ("waiting", lambda: H("please wait", "sit back", "attempting to", "bar over your head"), self.do_wait),
             ("tab", lambda: (H("flashing") and not H("arrow")) or H("open up the magic"), self.do_tab),
             ("go on", lambda: H("want a recap"), self.do_path),
-            ("magic: cast", lambda: H("wind strike"), self.do_wind_strike),
+            ("magic: cast", lambda: H("wind strike", "magic casting", "now have some runes", "runes to cast", "on a chicken"),
+             self.do_wind_strike),
             ("mainland", lambda: H("mainland"), self.do_mainland),
             ("fishing", lambda: H("fishing spot", "catch some shrimp"), self.do_fish),
             ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "nearby tree", "chop"),
@@ -611,7 +665,8 @@ class BotExecutor(HumanMixin, Bot):
             ("bank", lambda: H("this is your bank"), self.do_close_bank),
             ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
             ("poll booth", lambda: H("poll booth") and not H("door"), self.do_poll),
-            ("ladder", lambda: H("ladder", "enter some caves", "go down to", "indicated ladder"), self.do_ladder),
+            ("ladder", lambda: H("ladder", "enter some caves", "go down to", "indicated ladder",
+                                 "completed the tasks", "climb up"), self.do_ladder),
             ("door", lambda: H("door", "gate", "pass through", "continue through", "shown by the arrow"), self.do_path),
             ("walk to npc", lambda: H("follow the path", "find the"), self.do_talk),
             ("talk", lambda: True, self.do_talk),
@@ -657,11 +712,10 @@ class BotExecutor(HumanMixin, Bot):
                 break
         if "open up the magic" in t:
             want = "spells"
-        self.log.info(f"Tab: the flashing one (text says {want})")
-        if self.click_flashing_tab():
+        self.log.info(f"Tab: {want or 'the flashing one'}")
+        if want and self.click_tab(want):
             return
-        if want:
-            self.click_tab(want)
+        self.click_flashing_tab()
 
     def do_talk(self, t):
         npc = None
@@ -673,10 +727,25 @@ class BotExecutor(HumanMixin, Bot):
         self.talk(names)
 
     def do_path(self, t):
+        self._close_interface()  # e.g. the poll history window covers the view
+        if has(t, "speak to", "talk to"):
+            # "exit the door ... then speak to X": once X is in sight, talk (no walking)
+            npc = next((n for w, n in NPC_WORDS if has(t, w)), None)
+            if npc and self.find_npcs():
+                wanted = [f"Talk-to {npc}"]
+                for m in self.find_npcs()[:6]:
+                    if self.hover_click(m.get_point_within(), wanted):
+                        self.sleep_checked(random.uniform(1.5, 2.5))
+                        return
         verbs = ["Open Door", "Open Gate"]
         if self.hint_interact(verbs):
             return
-        self.walk_to_hint()
+        if not self.walk_to_hint():
+            if has(t, "speak to", "talk to") and self.walk_to_minimap_npc():
+                return
+            # no arrow at all: the nearest door/gate (red mark on the minimap)
+            if self.same >= 1 and self.walk_to_minimap_door():
+                self.hover_search(verbs)
 
     def do_ladder(self, t):
         # "go down to the caves" / "climb the ladder (up)" ; upstairs by mistake -> go down
@@ -919,7 +988,7 @@ class BotExecutor(HumanMixin, Bot):
 
     def do_poll(self, t):
         if self._close_interface():
-            return
+            time.sleep(random.uniform(0.5, 1.0))
         if not self.hint_interact(["Use Poll booth"], search=True):
             self.walk_to_hint()
 
@@ -933,7 +1002,14 @@ class BotExecutor(HumanMixin, Bot):
             self.sleep_checked(random.uniform(3, 4))
 
     def do_mainland(self, t):
-        if "teleport" in t and "home" in t:
+        m = self._find_tpl("data/ui/close-scroll-x.png", (412, 48, 468, 104), 0.96)
+        if m is not None and not self._scroll_open():
+            m = None
+        if m is not None:  # the "quest complete" scroll
+            self.log.info(f"Closing the quest scroll ({m.start_x},{m.start_y} conf {m.confidence:.2f})")
+            self.client.click(m.scale_px(-1).get_point_within())
+            time.sleep(random.uniform(0.6, 1.0))
+        if has(t, "home") and has(t, "teleport", "spell", "lumbridge", "take you"):
             self.ensure_tab("spells")
             if self.hover_scan_panel(["Cast Lumbridge Home Teleport", "Cast Home Teleport"]):
                 self.sleep_checked(random.uniform(14, 18))
@@ -976,6 +1052,15 @@ class BotExecutor(HumanMixin, Bot):
         return m.transform(x1, y1)
 
     def click_tab(self, name: str) -> bool:
+        if name in TAB_POS:
+            # fixed layout: every tab has its own place (measured: logout 646,484, settings 680,484)
+            col, row = TAB_POS[name]
+            x1 = TAB_ROWS[row][0] + col * TAB_W
+            y1, y2 = TAB_ROWS[row][1], TAB_ROWS[row][3]
+            self.client.click(MatchResult(x1 + 8, y1 + 7, x1 + TAB_W - 8, y2 - 7).get_point_within())
+            self.log.info(f"Clicked the {name} tab (fixed place)")
+            time.sleep(self.cfg.action_pause.choose())
+            return True
         for box in TAB_ROWS:
             m = self._find_tpl(TABS[name][0], (box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2), 0.62)
             if m is not None:
@@ -1165,9 +1250,19 @@ class BotExecutor(HumanMixin, Bot):
         hsv = cv2.cvtColor(np.asarray(crop), cv2.COLOR_RGB2HSV)
         hh = hsv[:, :, 0].astype(np.int16)
         red = ((hh <= 6) | (hh >= 174)) & (hsv[:, :, 1] >= 150) & (hsv[:, :, 2] >= 150)
-        mask = red | hue_mask(crop, self.cfg.hint_color.value, self.cfg.hint_hue_tol.value, 120, 120)
-        num, _, stats, cent = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+        # when the target is on the minimap the arrow is yellow over it (~33 px);
+        # map icons are ~12 px yellow blobs
+        yellow = (hh >= 20) & (hh <= 36) & (hsv[:, :, 1] >= 120) & (hsv[:, :, 2] >= 160)
         best = None
+        for mask, min_px in ((red, self.cfg.hint_min_pixels_minimap.value),
+                             (yellow, 22)):
+            best = self._best_minimap_blob(mask, box, min_px, best)
+        if best:
+            self.log.debug(f"Minimap hint at {best[1]} ({best[0]} px)")
+        return best[1] if best else None
+
+    def _best_minimap_blob(self, mask, box, min_px, best):
+        num, _, stats, cent = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
         cx, cy = MINIMAP_C  # the detected minimap box was 16 px off on the island
         r = MINIMAP_R
         for i in range(1, num):
@@ -1175,11 +1270,9 @@ class BotExecutor(HumanMixin, Bot):
             px, py = box[0] + float(cent[i][0]), box[1] + float(cent[i][1])
             if math.hypot(px - cx, py - cy) > r or math.hypot(px - cx, py - cy) < 9:
                 continue  # outside the round map (orbs, compass) / the character itself
-            if area >= self.cfg.hint_min_pixels_minimap.value and (best is None or area > best[0]):
+            if area >= min_px and (best is None or area > best[0]):
                 best = (area, (px, py))
-        if best:
-            self.log.debug(f"Minimap hint at {best[1]} ({best[0]} px; map centre {cx},{cy} r {r:.0f})")
-        return best[1] if best else None
+        return best
 
     def top_hover(self) -> str:
         """The game's own mouse-over line in the top-left corner of the game view
@@ -1217,7 +1310,8 @@ class BotExecutor(HumanMixin, Bot):
                 top2 = self.top_hover()
                 top = top2 if any(text_matches(top2, w) for w in wanted) else ""
             answers = list(answers) + [top]
-        if any(text_matches(a, w) for a in answers for w in wanted):
+        if any(text_matches(a, w) for a in answers for w in wanted) \
+                and not any(bad in (a or "").lower() for a in answers for bad in HOVER_NEVER):
             click(-1, -1)
             self.log.info(f"Clicked {answers} for {wanted}")
             time.sleep(self.cfg.action_pause.choose())
@@ -1334,8 +1428,38 @@ class BotExecutor(HumanMixin, Bot):
         self.log.info(f"Mouse-over search: no {wanted} around the character")
         return False
 
+    def panel_icons(self) -> list[tuple[int, int]]:
+        """Centres of the icons in the side panel (anything that stands out from the
+        plain brown background); the filtered spellbook shows a few big icons."""
+        x1, y1, x2, y2 = SIDE_PANEL
+        a = np.asarray(self.client.get_screenshot().convert("RGB").crop(SIDE_PANEL), dtype=np.int16)
+        bg = np.median(a.reshape(-1, 3), axis=0)
+        diff = np.abs(a - bg).sum(axis=2) > 60
+        diff = cv2.morphologyEx(diff.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        num, _, stats, cent = cv2.connectedComponentsWithStats(diff, connectivity=8)
+        out = []
+        for i in range(1, num):
+            x, y, w, h, area = stats[i]
+            if 12 <= w <= 60 and 12 <= h <= 60 and area >= 120:
+                out.append((x1 + int(cent[i][0]), y1 + int(cent[i][1])))
+        # an icon next to the panel's left pillar (Home Teleport) merges with it: the big
+        # icons sit in a row ~69 px apart, so add the places left of the found ones too
+        row = [p for p in out if p[1] < y2 - 30]
+        if row:
+            y = row[0][1]
+            x = min(p[0] for p in row) - 69
+            while x >= x1 + 12:
+                out.insert(0, (x, y))
+                x -= 69
+        return out
+
     def hover_scan_panel(self, wanted: list[str]) -> bool:
         x1, y1, x2, y2 = SIDE_PANEL
+        icons = self.panel_icons()
+        self.log.debug(f"Panel icons: {icons}")
+        for x, y in reversed(icons):  # the spell we want is usually after Home Teleport
+            if self.hover_click((x + random.randint(-3, 3), y + random.randint(-3, 3)), wanted):
+                return True
         for y in range(y1 + 8, y1 + 80, 24):
             for x in range(x1 + 8, x2 - 8, 24):
                 if self.hover_click((x + random.randint(-3, 3), y + random.randint(-3, 3)), wanted):
@@ -1363,9 +1487,11 @@ class BotExecutor(HumanMixin, Bot):
         cx, cy = MINIMAP_C
         dx, dy = mh[0] - cx, mh[1] - cy
         d = math.hypot(dx, dy)
-        r = MINIMAP_R - 10
-        k = min(1.0, r / d) if d else 0
-        pt = (int(cx + dx * k + random.uniform(-3, 3)), int(cy + dy * k + random.uniform(-3, 3)))
+        # not to the edge (a spot behind a wall gives "I can't reach that"): part of the
+        # way, a bit off the line after failed walks
+        reach = min(d, (MINIMAP_R - 10) * random.uniform(0.45, 0.75))
+        ang = math.atan2(dy, dx) + math.radians(random.uniform(-25, 25) if self.walks >= 3 else random.uniform(-6, 6))
+        pt = (int(cx + reach * math.cos(ang)), int(cy + reach * math.sin(ang)))
         self.log.info(f"Walking toward the minimap hint arrow ({pt})")
         self.client.click(pt)
         self._walked = True
@@ -1470,14 +1596,23 @@ class BotExecutor(HumanMixin, Bot):
         return True
 
     # ------------------------------------------------------------------ helpers
+    def _scroll_open(self) -> bool:
+        """The quest-complete scroll: a big plain parchment area in the game view."""
+        a = np.asarray(self.client.get_screenshot().convert("RGB").crop((120, 140, 360, 240)), dtype=np.int16)
+        r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+        tan = (r > 170) & (g > 140) & (b > 80) & (b < 170) & (r - b > 40)
+        return tan.mean() > 0.6
+
     def _close_interface(self) -> bool:
         """Close a window (bank, poll, equipment stats) with its X button."""
-        m = self._find_tpl("data/ui/close-ui-element.png", VIEW, 0.8)
+        m = self._find_tpl("data/ui/close-ui-element.png", VIEW, 0.9) \
+            or self._find_tpl("data/ui/close-window-x.png", (0, 0, 520, 340), 0.9) \
+            or (self._find_tpl("data/ui/close-scroll-x.png", (412, 48, 468, 104), 0.96) if self._scroll_open() else None)
         if m is None:
             return False
         self.client.click(m.scale_px(-1).get_point_within())
         time.sleep(random.uniform(0.5, 0.9))
-        self.log.info("Closed a window")
+        self.log.info(f"Closed a window (X at {m.start_x},{m.start_y} conf {m.confidence:.2f})")
         return True
 
     def _click_box(self, b) -> None:
