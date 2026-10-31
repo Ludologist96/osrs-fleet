@@ -46,6 +46,8 @@ python main.py
 8. Declare `name`, `description`, `tier`, `instructions` class attributes on `BotExecutor`.
 9. Type-annotate every `BotConfig` field. No annotation → no UI form field.
 10. Wrap `start()` in `try / except ScriptTerminationException`.
+11. All clicks/moves humanlike (`client.click` / `smart_click_*` / `move_to`, aim with `get_point_within()`), never raw `pyautogui.click()`.
+12. Every bot: `BotConfig(HabitsConfig)` (bots/core/habits.py) + `BotExecutor(HumanMixin, Bot)` (core/human.py), `human_init()` in `start()`, habits wired in (breaks, alt-tab, misclicks, double clicks, micro pauses, camera). A new habit goes into core/human.py + HabitsConfig and into every bot in the same change.
 
 ## When in doubt, ask the user
 

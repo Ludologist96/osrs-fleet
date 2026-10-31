@@ -38,6 +38,7 @@ These are not negotiable. The framework will not protect you if you break them; 
 | R9 | **`BotConfig` fields must have type annotations.** `field: ItemParam = ItemParam("X")` — the `: ItemParam` part is what the UI reads. | No annotation, no form field, invisible parameter. |
 | R10 | **Wrap `start()` body in `try / except ScriptTerminationException`** so PageUp produces a clean log line, not a traceback. | UX. |
 | R11 | **Every click and mouse move must be humanlike: go through `client.click` / `client.smart_click_*` / `client.move_to` (or `core.input.mouse_control.click` / `press` / `move_to`). Never `pyautogui.click()`/`rightClick()`** (it presses and releases in the same instant). Aim with `match.get_point_within()` (normal distribution around the middle), not fixed points or `get_center()` without jitter. | The game records mouse input. The framework gives curved paths, overshoot, varied speed, a 35-250 ms button hold and centre-weighted aim; raw calls skip all of it. |
+| R12 | **Every bot gets the same player habits as the woodcutter and slayer.** `class BotConfig(HabitsConfig)` (`bots/core/habits.py`: breaks, long breaks, alt-tab, walk-away, misclick, double click, micro pause, camera) and `class BotExecutor(HumanMixin, Bot)` (`core/human.py`); call `self.human_init()` first in `start()`, pass `break_cfg`/`long_break_cfg`/`break_ui_browse_chance` to `Bot.__init__`, call `maybe_alt_tab()` 1-2 s after each main action that keeps the character busy, `micro_idle()`/`maybe_misclick()`/`note_action()`+`maybe_camera_fidget()` around clicks, `click_inv()` for inventory. Override a shared field in the bot only with a written reason. A new or changed habit is added to `core/human.py` + `HabitsConfig` **and wired into every bot in the same change**. | Igor's standing rule (Oct 2026): every bot must act like a person, and he doesn't want to repeat it for each new bot. One shared config = one place to change the numbers. |
 
 ---
 
@@ -47,11 +48,12 @@ Copy this. Fill it in. Do not deviate without reason.
 
 ```python
 # bots/your_bot.py
-from bots.core import BotConfigMixin
+from bots.core.habits import HabitsConfig   # shared player habits (R12)
 from bots.core.cfg_types import (
     RangeParam, BreakCfgParam, ItemParam, RGBParam, BooleanParam,
 )
 from core.bot import Bot
+from core.human import HumanMixin
 from core.osrs_client import ToolplaneTab
 from core.control import ScriptTerminationException
 
@@ -59,7 +61,7 @@ import random
 import time
 
 
-class BotConfig(BotConfigMixin):
+class BotConfig(HabitsConfig):
     # --- inputs the user picks ---
     target_item: ItemParam = ItemParam("Coal")              # noqa: E501
     target_tile: RGBParam = RGBParam.from_tuple((255, 0, 50))
@@ -72,14 +74,11 @@ class BotConfig(BotConfigMixin):
     max_retries: int = 5
     retry_backoff: RangeParam = RangeParam(1.0, 2.5)
 
-    # --- breaks ---
-    break_cfg: BreakCfgParam = BreakCfgParam(
-        RangeParam(30, 90),   # break length (seconds)
-        0.02,                 # chance per loop iteration
-    )
+    # breaks, long breaks, alt-tab, misclicks, double clicks, camera: inherited from
+    # HabitsConfig - override one here only with a written reason
 
 
-class BotExecutor(Bot):
+class BotExecutor(HumanMixin, Bot):
     name:         str = "Your Bot Name"
     description:  str = "One-sentence summary the UI shows."
     tier:         str = "B"          # S/A/B/C — self-assessed quality
@@ -92,7 +91,8 @@ class BotExecutor(Bot):
     """
 
     def __init__(self, config: BotConfig, user: str = ""):
-        super().__init__(user, break_cfg=config.break_cfg)
+        super().__init__(user, break_cfg=config.break_cfg, long_break_cfg=config.long_break_cfg,
+                         break_ui_browse_chance=config.break_ui_browse_chance.value)
         self.cfg: BotConfig = config
         self.fail_count = 0
         self.iterations = 0
@@ -104,6 +104,7 @@ class BotExecutor(Bot):
     def start(self) -> None:
         self.log.info(f"Starting {self.name}")
         self.log.debug(f"Config: {self.cfg.export_config()}")
+        self.human_init()  # habit cooldowns start now (R12)
 
         try:
             self._preflight()

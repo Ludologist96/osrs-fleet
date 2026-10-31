@@ -40,6 +40,7 @@ import numpy as np
 from PIL import Image
 
 from bots.core import BotConfigMixin
+from bots.core.habits import HabitsConfig
 from bots.core.cfg_types import (
     BooleanParam, BreakCfgParam, FloatParam, IntParam, RangeParam, RGBParam, RGBListParam,
     StringListParam,
@@ -56,7 +57,7 @@ from core.region_match import MatchResult
 from core.screen_words import lines, words, find_line
 
 
-class BotConfig(BotConfigMixin):
+class BotConfig(HabitsConfig):
     # --- what it sees ---
     # NPC Indicators hull colour (the launcher highlights the tutorial NPCs in it).
     npc_colors: RGBListParam = RGBListParam([RGBParam(0, 255, 255)])
@@ -90,26 +91,19 @@ class BotConfig(BotConfigMixin):
     fight_timeout: FloatParam = FloatParam(90.0)
     hover_search_points: IntParam = IntParam(70)   # mouse-over search around the character
 
-    # --- habits (small, it's a short run) ---
-    camera_chance: FloatParam = FloatParam(0.04)   # after a finished step
-    camera_rotate_time: RangeParam = RangeParam(0.3, 1.0)
-    camera_zoom_chance: FloatParam = FloatParam(0.4)
-    start_zoom_in: IntParam = IntParam(15)
-    zoom_min: IntParam = IntParam(-4)
-    zoom_max: IntParam = IntParam(3)
-    misclick_chance: FloatParam = FloatParam(0.02)
-    micro_idle_chance: FloatParam = FloatParam(0.10)
-    micro_idle: RangeParam = RangeParam(0.3, 1.2)
-    double_click_chance: FloatParam = FloatParam(0.0)
-    break_cfg: BreakCfgParam = BreakCfgParam(RangeParam(8, 25), FloatParam(0.004))
-    break_ui_browse_chance: FloatParam = FloatParam(0.0)
-    session_max_minutes: IntParam = IntParam(0)
+    # --- habits: the shared ones are in bots/core/habits.py; overrides for the island ---
+    start_zoom_in: IntParam = IntParam(15)  # the view the island steps were tuned with
+    break_ui_browse_chance: FloatParam = FloatParam(0.0)  # side-panel tabs unlock step by step here
+    session_max_minutes: IntParam = IntParam(0)  # a ~30 min run: no forced long break
     # Save a screenshot whenever a step is retried (for tuning; off once it runs well).
     debug_shots: BooleanParam = BooleanParam(True)
 
 
 # Fixed layout, window coords (= canvas coords on the fleet).
 CHAT_BOX = (0, 338, 520, 476)
+# steps after which the character keeps busy on its own for a while (an alt-tab fits)
+ALT_TAB_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "bake", "mine", "smelt",
+                 "anvil", "smithing menu", "attack rat", "bow", "magic: cast", "waiting"}
 # never clicked even when the fuzzy match says yes ("Cast Minigame Teleport" ~ "Cast Home Teleport")
 HOVER_NEVER = ("minigame",)
 SIDE_PANEL = (548, 205, 740, 465)
@@ -269,7 +263,7 @@ class BotExecutor(HumanMixin, Bot):
     """
 
     def __init__(self, config: BotConfig, user: str = ""):
-        super().__init__(user, break_cfg=config.break_cfg,
+        super().__init__(user, break_cfg=config.break_cfg, long_break_cfg=config.long_break_cfg,
                          break_ui_browse_chance=config.break_ui_browse_chance.value)
         self.cfg: BotConfig = config
         self.log = get_logger("TutorialIsland")
@@ -407,6 +401,8 @@ class BotExecutor(HumanMixin, Bot):
             raise
         except Exception:
             self.log.warning(f"Step '{name}' failed", exc_info=True)
+        if name in ALT_TAB_STEPS and not self._walked:
+            self.maybe_alt_tab(lambda: None, name)
         # after a walk only a short look (then walk on); after an action wait for the result
         self._wait_change(key, 4.0 if self._walked else self.cfg.step_wait.value)
 

@@ -159,7 +159,11 @@ class BotManagerService:
     @staticmethod
     def _extract_config_params(config_class: Type[BotConfigMixin]) -> Dict[str, Dict[str, Any]]:
         params: Dict[str, Dict[str, Any]] = {}
-        annotations = getattr(config_class, "__annotations__", {})
+        # the bot's own fields first, then inherited ones (bots/core/habits.py HabitsConfig)
+        annotations: Dict[str, Any] = {}
+        for klass in config_class.__mro__:
+            for k, v in getattr(klass, "__annotations__", {}).items():
+                annotations.setdefault(k, v)
 
         for param_name, _ in annotations.items():
             if param_name.startswith("_"):

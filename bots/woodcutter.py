@@ -1,4 +1,5 @@
 from bots.core import BotConfigMixin
+from bots.core.habits import HabitsConfig
 from bots.core.cfg_types import StringListParam, BooleanParam, StringParam, IntParam, FloatParam, RGBParam, RangeParam, BreakCfgParam, RGBListParam, RouteParam, WaypointParam, ItemParam
 from core.bot import Bot
 from core.bank import BankInterface
@@ -19,7 +20,7 @@ from core.logger import get_logger
 import sys
 from core.input import keys as keyboard  # works on Windows and on fleet virtual displays
 
-class BotConfig(BotConfigMixin): 
+class BotConfig(HabitsConfig):
     # Configuration parameters
 
     # Tree configuration
@@ -38,45 +39,11 @@ class BotConfig(BotConfigMixin):
     # player position overlay; without it every click wastes ~5 s retrying.
     wait_while_walking: BooleanParam = BooleanParam(False)
     
-    break_cfg: BreakCfgParam = BreakCfgParam(
-        RangeParam(12, 40),  # break duration range in seconds
-        FloatParam(0.012)    # break chance
-    )
-    # Chance a short break is spent looking through the side-panel tabs
-    # (skills, quests, equipment...) before going back to the inventory.
-    break_ui_browse_chance: FloatParam = FloatParam(0.5)
-    # Long break: AFK long enough to get logged out (logs back in after),
-    # at most once every 90 minutes.
-    long_break_cfg: BreakCfgParam = BreakCfgParam(
-        RangeParam(1500, 2000),  # 25-33 minutes, logged out
-        FloatParam(0.014)
-    )
-    # Forced long break after this much play (minutes) without one.
-    session_max_minutes: IntParam = IntParam(210)
 
-    # --- player habits (core/human.py) ---
-    # Alt-tab: 1-2 s after a tree click, sometimes look at another window for a while.
-    alt_tab_chance: FloatParam = FloatParam(0.2)  # per roll: short 18.7% (doubled twice), medium 1.3%
-    alt_tab_cooldown: FloatParam = FloatParam(60.0)        # s between two rolls
-    alt_tab_short: RangeParam = RangeParam(4.0, 18.0)       # s
-    alt_tab_medium: RangeParam = RangeParam(25.0, 90.0)     # s
-    alt_tab_medium_chance: FloatParam = FloatParam(0.066)
-    # Walk-away: after dropping/banking, sometimes a few steps via the minimap.
-    walk_away_chance: FloatParam = FloatParam(0.0)        # off until pathfinding exists (it got the bots lost)
-    walk_away_cooldown: FloatParam = FloatParam(300.0)     # s
-    walk_away_tiles: RangeParam = RangeParam(3, 8)
-    walk_away_pause: RangeParam = RangeParam(0.8, 2.2)
-    # Rarely click a little next to the tree, then click the tree again.
-    misclick_chance: FloatParam = FloatParam(0.025)
+    # --- player habits: the shared ones are in bots/core/habits.py; woodcutter-only below ---
     # Sometimes click a tree without waiting for its mouse-over text (checked after).
     skip_hover_chance: FloatParam = FloatParam(0.40)
     skip_hover_check: RangeParam = RangeParam(0.9, 1.4)    # s until "is it chopping?"
-    # A quick click is sometimes a fast double click.
-    double_click_chance: FloatParam = FloatParam(0.40)
-    double_click_gap: RangeParam = RangeParam(0.08, 0.16)  # s between the two clicks
-    # After a click, sometimes a short extra pause.
-    micro_idle_chance: FloatParam = FloatParam(0.07)
-    micro_idle: RangeParam = RangeParam(0.25, 0.9)
     # Tree colours: sometimes a random order instead of cycling through them.
     color_shuffle_chance: FloatParam = FloatParam(0.20)
     # Before a click, sometimes move the mouse a bit away and back.
@@ -135,14 +102,6 @@ class BotConfig(BotConfigMixin):
     # Trees cut without any break: take a short one (0 = off).
     max_trees_before_forced_break: IntParam = IntParam(0)
 
-    # Camera: after a tree is cut, this chance to rotate / zoom the camera a bit
-    camera_chance: FloatParam = FloatParam(0.10)
-    camera_force_every: IntParam = IntParam(10)  # trees cut without a fidget: force one
-    camera_rotate_time: RangeParam = RangeParam(0.3, 1.2)  # seconds holding an arrow key (~3 s = full turn)
-    camera_zoom_chance: FloatParam = FloatParam(0.5)       # chance a fidget also zooms
-    zoom_min: IntParam = IntParam(-4)  # wheel notches out from the starting zoom (limit)
-    zoom_max: IntParam = IntParam(3)   # wheel notches in from the starting zoom (limit)
-    start_zoom_in: IntParam = IntParam(14)  # home view: fully out, then this many notches in
     # No marked tree visible: turn the camera to look for one (from the 2nd miss in a row)
     camera_search: BooleanParam = BooleanParam(True)
     camera_search_time: RangeParam = RangeParam(0.6, 1.4)

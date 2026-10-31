@@ -23,6 +23,7 @@ When opening a fresh bot-building conversation, the prompt at [.claude/prompts/n
 9. Every `BotConfig` field needs a type annotation — that's what the UI discovers.
 10. Wrap `start()` in `try / except ScriptTerminationException` for a clean exit log.
 11. All clicks/moves humanlike: only via `client.click` / `smart_click_*` / `move_to` (or `mouse_control.press`), never raw `pyautogui.click()`; aim with `get_point_within()`.
+12. **Every bot behaves like the woodcutter and slayer** (Igor's standing rule): config `class BotConfig(HabitsConfig)` ([bots/core/habits.py](bots/core/habits.py)), executor `class BotExecutor(HumanMixin, Bot)` ([core/human.py](core/human.py)), `self.human_init()` at the start of `start()`, and the habits wired in: breaks (short + long), alt-tab after main actions, misclicks, quick/double clicks, micro pauses, camera fidgets, humanlike inventory clicks. A new or changed habit goes into `core/human.py` + `HabitsConfig` once and is then wired into **every** bot in the same change - never into one bot only.
 
 The long form, with rationale and examples, lives in [bot-building.md](.claude/instructions/bot-building.md).
 

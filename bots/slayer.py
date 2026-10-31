@@ -23,6 +23,7 @@ Breaks, tab browsing, long AFK breaks and camera moves work like the woodcutter.
 Not yet: banking (a full inventory just stops picking up `loot_keep`), eating to heal.
 """
 from bots.core import BotConfigMixin
+from bots.core.habits import HabitsConfig
 from bots.core.cfg_types import (
     StringListParam, BooleanParam, IntParam, FloatParam, RGBParam, RGBListParam,
     RangeParam, BreakCfgParam, StringParam,
@@ -43,7 +44,7 @@ import random
 import time
 
 
-class BotConfig(BotConfigMixin):
+class BotConfig(HabitsConfig):
     # --- what to attack ---
     # Monster names (as in game). The launcher puts them in RuneLite's NPC Indicators;
     # a highlighted monster is only clicked when its mouse-over says "Attack <name>".
@@ -125,36 +126,10 @@ class BotConfig(BotConfigMixin):
     max_retries: IntParam = IntParam(5)  # unexpected errors in a row before stopping
 
     # --- camera (like the woodcutter) ---
-    camera_chance: FloatParam = FloatParam(0.10)  # after a kill
-    camera_force_every: IntParam = IntParam(10)  # kills without a fidget: force one
-    camera_rotate_time: RangeParam = RangeParam(0.3, 1.2)
-    camera_zoom_chance: FloatParam = FloatParam(0.5)
-    zoom_min: IntParam = IntParam(-4)
-    zoom_max: IntParam = IntParam(3)
-    start_zoom_in: IntParam = IntParam(14)  # home view: fully out, then this many notches in
     camera_search: BooleanParam = BooleanParam(True)  # nothing highlighted: look around
     camera_search_time: RangeParam = RangeParam(0.6, 1.4)
 
-    # --- breaks (like the woodcutter) ---
-    break_cfg: BreakCfgParam = BreakCfgParam(RangeParam(12, 40), FloatParam(0.012))
-    break_ui_browse_chance: FloatParam = FloatParam(0.5)
-    long_break_cfg: BreakCfgParam = BreakCfgParam(RangeParam(1500, 2000), FloatParam(0.014))
-    session_max_minutes: IntParam = IntParam(210)  # forced long break after this much play
-
-    # --- player habits (core/human.py) ---
-    # Alt-tab: 1-2 s after an attack, sometimes look at another window for a while.
-    alt_tab_chance: FloatParam = FloatParam(0.2)  # per roll: short 18.7% (doubled twice), medium 1.3%
-    alt_tab_cooldown: FloatParam = FloatParam(60.0)        # s between two rolls
-    alt_tab_short: RangeParam = RangeParam(4.0, 18.0)       # s
-    alt_tab_medium: RangeParam = RangeParam(25.0, 90.0)     # s
-    alt_tab_medium_chance: FloatParam = FloatParam(0.066)
-    # Walk-away: after a kill + loot, sometimes a few steps via the minimap.
-    walk_away_chance: FloatParam = FloatParam(0.0)        # off until pathfinding exists (it got the bots lost)
-    walk_away_cooldown: FloatParam = FloatParam(300.0)     # s
-    walk_away_tiles: RangeParam = RangeParam(3, 8)
-    walk_away_pause: RangeParam = RangeParam(0.8, 2.2)
-    # Rarely click a little next to the monster, then attack it again.
-    misclick_chance: FloatParam = FloatParam(0.03)
+    # --- player habits: the shared ones are in bots/core/habits.py; slayer-only below ---
     # Sometimes attack without waiting for the mouse-over text (checked after).
     skip_hover_chance: FloatParam = FloatParam(0.40)
     skip_hover_check: RangeParam = RangeParam(0.9, 1.4)    # s until "is it fighting?"
@@ -172,12 +147,6 @@ class BotConfig(BotConfigMixin):
     # mouse-over check (the rest check it first).
     quick_use_chance: FloatParam = FloatParam(0.40)
     quick_drop_chance: FloatParam = FloatParam(0.40)
-    # A quick click (attack, loot, bury, drop) is sometimes a fast double click.
-    double_click_chance: FloatParam = FloatParam(0.40)
-    double_click_gap: RangeParam = RangeParam(0.08, 0.16)  # s between the two clicks
-    # After a click, sometimes a short extra pause.
-    micro_idle_chance: FloatParam = FloatParam(0.07)
-    micro_idle: RangeParam = RangeParam(0.25, 0.9)
 
 
 # Opponent Information health bar (RuneLite colours, drawn at ~90% opacity).
