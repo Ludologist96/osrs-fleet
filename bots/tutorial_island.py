@@ -61,7 +61,7 @@ class BotConfig(BotConfigMixin):
     # NPC Indicators hull colour (the launcher highlights the tutorial NPCs in it).
     npc_colors: RGBListParam = RGBListParam([RGBParam(0, 255, 255)])
     color_tolerance: IntParam = IntParam(40)
-    min_npc_pixels: IntParam = IntParam(60)
+    min_npc_pixels: IntParam = IntParam(25)
     # The tutorial's hint arrow: yellow (hue), strongly coloured.
     hint_color: RGBParam = RGBParam(255, 255, 0)
     hint_hue_tol: IntParam = IntParam(8)
@@ -93,7 +93,7 @@ class BotConfig(BotConfigMixin):
     camera_chance: FloatParam = FloatParam(0.04)   # after a finished step
     camera_rotate_time: RangeParam = RangeParam(0.3, 1.0)
     camera_zoom_chance: FloatParam = FloatParam(0.4)
-    start_zoom_in: IntParam = IntParam(10)
+    start_zoom_in: IntParam = IntParam(15)
     zoom_min: IntParam = IntParam(-4)
     zoom_max: IntParam = IntParam(3)
     misclick_chance: FloatParam = FloatParam(0.02)
@@ -113,6 +113,8 @@ SIDE_PANEL = (548, 205, 740, 465)
 TAB_ROWS = ((521, 168, 752, 204), (521, 466, 752, 502))
 TAB_W = 33
 VIEW = (4, 4, 512, 334)  # game view
+OVERLAY_BOX = (4, 22, 330, 160)
+HOVER_LINE = (4, 4, 360, 24)  # the game's mouse-over text, top-left of the view  # some instructions show in a dark box top-left of the view
 # tab name -> template (data/ui) and words in the instruction that point to it
 TABS = {
     "settings": ("data/ui/settings.webp", ("spanner", "settings")),
@@ -131,7 +133,7 @@ TABS = {
 NPCS = ["Gielinor Guide", "Survival Expert", "Master Chef", "Quest Guide", "Mining Instructor",
         "Combat Instructor", "Account Guide", "Brother Brace", "Magic Instructor"]
 # instruction words -> the NPC to talk to
-NPC_WORDS = [("gielinor guide", "Gielinor Guide"), ("survival", "Survival Expert"),
+NPC_WORDS = [("gielinor guide", "Gielinor Guide"), ("survival", "Survival Expert"), ("surviv", "Survival Expert"),
              ("chef", "Master Chef"), ("quest guide", "Quest Guide"), ("quests", "Quest Guide"),
              ("mining instructor", "Mining Instructor"), ("combat", "Combat Instructor"),
              ("account", "Account Guide"), ("monk", "Brother Brace"), ("brother brace", "Brother Brace"),
@@ -158,6 +160,11 @@ def text_matches(text: str, wanted: str) -> bool:
     if not text:
         return False
     verb, _, name = wanted.lower().partition(" ")
+    if re.search(r"\b[o0]ak\b", text) and "oak" not in wanted.lower():
+        return False  # oak trees on the island need level 15 woodcutting
+    if verb != "*" and "*" not in name and len(text) >= 6 and \
+            SequenceMatcher(None, text[:len(wanted) + 3], wanted.lower()).ratio() >= 0.8:
+        return True  # whole text close enough ("Nat Fishing spot" = "Net Fishing spot")
     if verb != "*":
         first = text.split(" ", 1)[0]
         if tools.text_similarity(first, verb) < HOVER_SIM and not text.startswith(verb):
@@ -167,7 +174,7 @@ def text_matches(text: str, wanted: str) -> bool:
             rest = text  # these verbs have their own words; look at all of it
     else:
         rest = text
-    if not name:
+    if not name or name == "*":
         return True
     if len(name) <= 4:
         return name in rest
@@ -175,6 +182,33 @@ def text_matches(text: str, wanted: str) -> bool:
               max((SequenceMatcher(None, rest[i:i + len(name)], name).ratio()
                    for i in range(0, max(1, len(rest) - len(name) + 1))), default=0.0))
     return sim >= HOVER_SIM
+
+
+def _norm(x: str) -> str:
+    """Lower case with the letters OCR mixes up made the same (I/l/1/|, 0/o)."""
+    x = x.lower()
+    x = re.sub(r"[il1|!]", "l", x)
+    x = x.replace("0", "o").replace("{", "i").replace("rn", "m")
+    return re.sub(r"[^a-z ]", "", x)
+
+
+def has(text: str, *keys: str) -> bool:
+    """Any of `keys` in `text`, tolerating OCR letter mistakes (keys of 5+ letters
+    match a same-length piece of the text at 80%)."""
+    from difflib import SequenceMatcher
+    tn = _norm(text)
+    for k in keys:
+        kn = _norm(k)
+        if kn in tn:
+            return True
+        if len(kn) >= 5:
+            n = len(kn)
+            for i in range(0, max(1, len(tn) - n + 1)):
+                if tn[i] != kn[0] and tn[i + n - 1:i + n] != kn[-1:]:
+                    continue
+                if SequenceMatcher(None, tn[i:i + n], kn).ratio() >= 0.8:
+                    return True
+    return False
 
 
 class BotExecutor(HumanMixin, Bot):
@@ -219,6 +253,13 @@ class BotExecutor(HumanMixin, Bot):
     # ================================================================== main loop
     def start(self):
         self.log.info("Starting Tutorial Island")
+        # an arrow key left held down (a bot stopped in the middle of a camera turn) keeps
+        # the camera spinning and every click misses: let go of them first
+        for k in ("left", "right", "up", "down"):
+            try:
+                keyboard.release(k)
+            except Exception:
+                pass
         self.human_init()
         try:
             while not self.terminate:
@@ -249,10 +290,12 @@ class BotExecutor(HumanMixin, Bot):
         if self._dialogue(low, sc):
             self.unknown = 0
             return
-        # 2) the appearance screen (no instruction box yet)
-        if self._appearance(sc):
-            return
+        if len(re.sub(r"[^a-z]", "", low)) < 18:
+            low = ""  # just the chat input line ("Name: *") or OCR crumbs
         if not low.strip():
+            # the appearance screen has no instruction box yet
+            if self.unknown in (2, 6) and self._appearance(sc):
+                return
             self.unknown += 1
             if self.unknown % 5 == 0:
                 self.log.info(f"No instruction or dialogue seen ({self.unknown}/{self.cfg.max_unknown.value})")
@@ -324,15 +367,73 @@ class BotExecutor(HumanMixin, Bot):
 
     # ================================================================== reading
     def read_chat(self, sc: Image.Image | None = None) -> str:
+        """The current instruction or dialogue. Two places: the chat box (parchment box,
+        NPC dialogue: dark text) and, for some steps ("Moving around"), a dark box in the
+        top-left of the game view with yellow/white text. A dialogue in the chat box wins;
+        otherwise the overlay when it has text, else the chat box."""
         sc = sc or self.client.get_screenshot()
-        box = self._chat_box()
-        try:
-            ls = lines(words(sc, box, psm=6, min_conf=20))
-        except Exception:
-            self.log.debug("chat OCR failed", exc_info=True)
+        chat = self._ocr_region(sc, self._chat_box(), "chat")
+        self._chat_lines_box = getattr(self, "_lines_chat", [])
+        self._chat_lines = self._chat_lines_box
+        if self._is_dialogue(chat.lower()):
+            return chat
+        over = self._ocr_region(sc, OVERLAY_BOX, "overlay")
+        if len(re.sub(r"[^a-z]", "", over.lower())) >= 20:
+            self._chat_lines = getattr(self, "_lines_overlay", [])
+            return over
+        return chat
+
+    def _ocr_region(self, sc, box, kind: str) -> str:
+        """One Tesseract pass over the text pixels only (Tesseract on the whole coloured box
+        took >10 s on the laptop; this ~1.5 s). An unchanged region returns the last text."""
+        crop = np.asarray(sc.convert("RGB").crop(box), dtype=np.int16)
+        r, g, b = crop[:, :, 0], crop[:, :, 1], crop[:, :, 2]
+        if kind == "chat":
+            # black / dark red / dark blue / blue text on the parchment (~200,180,140)
+            ink = (np.maximum(np.maximum(r, g), b) < 120) | ((b > 140) & (r < 90) & (g < 90))
+        else:
+            # yellow / orange / white text on a dark box
+            ink = ((r > 190) & (g > 110) & (b < 110)) | (np.minimum(np.minimum(r, g), b) > 205)
+        sig = ink[::2, ::2].tobytes()
+        cache = getattr(self, "_ocr_cache", None)
+        if cache is None:
+            cache = self._ocr_cache = {}
+        if cache.get(kind, (None,))[0] == sig:
+            return cache[kind][1]
+        if ink.mean() < 0.002:
+            cache[kind] = (sig, "")
+            setattr(self, f"_lines_{kind}", [])
             return ""
-        self._chat_lines = ls
-        return " ".join(l["text"] for l in ls)
+        img = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8))
+        img = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
+        t0 = time.time()
+        try:
+            import pytesseract
+            from core.ocr import tess  # noqa: F401  (sets the tessdata folder)
+            d = pytesseract.image_to_data(img, lang="osrs", config="--psm 6",
+                                          output_type=pytesseract.Output.DICT, timeout=20)
+        except Exception as e:
+            self.log.warning(f"OCR ({kind}) failed: {e}")
+            return ""
+        ws = []
+        for i, t in enumerate(d["text"]):
+            t = (t or "").strip()
+            try:
+                conf = float(d["conf"][i])
+            except (TypeError, ValueError):
+                conf = -1.0
+            if not t or conf < 10:
+                continue
+            x, y, w, h = d["left"][i], d["top"][i], d["width"][i], d["height"][i]
+            ws.append({"text": t, "conf": conf, "x1": box[0] + x // 2, "y1": box[1] + y // 2,
+                       "x2": box[0] + (x + w) // 2, "y2": box[1] + (y + h) // 2,
+                       "line": f'{d["block_num"][i]}.{d["par_num"][i]}.{d["line_num"][i]}'})
+        ls = lines(ws)
+        setattr(self, f"_lines_{kind}", ls)
+        text = " ".join(l["text"] for l in ls)
+        cache[kind] = (sig, text)
+        self.log.debug(f"OCR {kind} {time.time() - t0:.1f}s: {text[:100]!r}")
+        return text
 
     def _chat_box(self):
         try:
@@ -343,20 +444,30 @@ class BotExecutor(HumanMixin, Bot):
             pass
         return CHAT_BOX
 
+    CONTINUE_RE = re.compile(r"(click|here|tap) (here )?t[o0] c[o0]n?t|t[o0] c[o0]nt[il1]?nu|c[o0]nt[il1]?nue$")
+    OPTION_RE = re.compile(r"select an? [o0]pt|select an?\b")
+
+    def _continue(self, low: str) -> bool:
+        return bool(self.CONTINUE_RE.search(low.strip()))
+
+    def _options(self, low: str) -> bool:
+        return bool(self.OPTION_RE.search(low))
+
     def _is_dialogue(self, low: str) -> bool:
-        return "to continue" in low or "select an option" in low
+        return self._continue(low) or self._options(low)
 
     def _dialogue(self, low: str, sc) -> bool:
-        if "select an option" in low:
+        if self._options(low):
             return self._choose_option()
-        if "to continue" in low:
+        if self._continue(low):
             time.sleep(self.cfg.continue_pause.choose())
             keyboard.press_and_release("space")
             self.log.debug("Dialogue: space")
             time.sleep(random.uniform(0.3, 0.6))
             # some boxes ignore space: click the line then
-            if "to continue" in self.read_chat().lower() and self._key(self.read_chat().lower()) == self._key(low):
-                ln = next((l for l in getattr(self, "_chat_lines", []) if "continue" in l["text"].lower()), None)
+            again = self.read_chat().lower()
+            if self._continue(again) and self._key(again) == self._key(low):
+                ln = next((l for l in getattr(self, "_chat_lines", []) if self._continue(l["text"].lower())), None)
                 if ln:
                     self._click_box(ln)
             return True
@@ -364,7 +475,7 @@ class BotExecutor(HumanMixin, Bot):
 
     def _choose_option(self) -> bool:
         ls = getattr(self, "_chat_lines", [])
-        idx = next((i for i, l in enumerate(ls) if "select an option" in l["text"].lower()), None)
+        idx = next((i for i, l in enumerate(ls) if self._options(l["text"].lower())), None)
         if idx is None:
             return False
         options = [l for l in ls[idx + 1:] if len(l["text"].strip()) > 1][:5]
@@ -392,39 +503,42 @@ class BotExecutor(HumanMixin, Bot):
 
     # ================================================================== rules
     def _rule(self, t: str):
+        """Which step the instruction asks for. OCR mixes up letters ("Iogs", "treo",
+        "{con"), so every keyword is looked for fuzzily (has())."""
+        H = lambda *k: has(t, *k)
         R = [
-            ("appearance", lambda: "appearance" in t and "character" in t, self.do_appearance),
-            ("waiting", lambda: "please wait" in t or "sit back" in t or "attempting to" in t
-                                or "bar over your head" in t, self.do_wait),
-            ("tab", lambda: "flashing" in t or "open up the magic" in t, self.do_tab),
-            ("go on", lambda: "if you want a recap" in t, self.do_path),
-            ("magic: cast", lambda: "wind strike" in t, self.do_wind_strike),
-            ("mainland", lambda: "mainland" in t, self.do_mainland),
-            ("fishing", lambda: "fishing spot" in t or ("net" in t and "shrimp" in t), self.do_fish),
-            ("woodcutting", lambda: "need some logs" in t or "cut down" in t or "chop" in t, self.do_chop),
-            ("firemaking", lambda: "tinderbox" in t, self.do_fire),
-            ("cook shrimp", lambda: "shrimp" in t and "cook" in t, self.do_cook_shrimp),
-            ("dough", lambda: "dough" in t and ("flour" in t or "mix" in t), self.do_dough),
-            ("bake", lambda: "range" in t and ("bread" in t or "dough" in t or "bake" in t), self.do_range),
-            ("run", lambda: "run or walk" in t or "running is faster" in t, self.do_run),
-            ("smithing menu", lambda: "smithing menu" in t or "list of all the things" in t, self.do_dagger_menu),
-            ("anvil", lambda: "anvil" in t and "hammer" in t, self.do_anvil),
-            ("smelt", lambda: "smelt" in t and "furnace" in t, self.do_smelt),
-            ("mine", lambda: ("mine" in t or "mining" in t) and ("tin" in t or "copper" in t)
-                             and "bronze bar" not in t, self.do_mine),
-            ("equipment stats", lambda: "worn inventory" in t and "unequip" not in t
-                                        and "holding your dagger" not in t, self.do_equipment_stats),
-            ("wield dagger", lambda: "equipment stats" in t or ("dagger" in t and "wear" in t), self.do_wield_dagger),
-            ("sword and shield", lambda: "unequip" in t, self.do_sword_shield),
-            ("bow", lambda: "bow" in t and "arrow" in t, self.do_bow),
-            ("attack rat", lambda: "rat" in t and ("slay" in t or "attack" in t), self.do_attack_rat),
-            ("first kill", lambda: "first kill" in t, self.do_after_kill),
-            ("bank", lambda: "this is your bank" in t, self.do_close_bank),
-            ("bank booth", lambda: "bank of gielinor" in t or "front of the building" in t, self.do_bank_booth),
-            ("poll booth", lambda: "poll booth" in t and "door" not in t, self.do_poll),
-            ("ladder", lambda: "ladder" in t, self.do_ladder),
-            ("door", lambda: "door" in t or "gate" in t or "follow the path" in t or "pass through" in t
-                             or "continue through" in t, self.do_path),
+            ("appearance", lambda: H("appearance") and H("character"), self.do_appearance),
+            ("waiting", lambda: H("please wait", "sit back", "attempting to", "bar over your head"), self.do_wait),
+            ("tab", lambda: (H("flashing") and not H("arrow")) or H("open up the magic"), self.do_tab),
+            ("go on", lambda: H("want a recap"), self.do_path),
+            ("magic: cast", lambda: H("wind strike"), self.do_wind_strike),
+            ("mainland", lambda: H("mainland"), self.do_mainland),
+            ("fishing", lambda: H("fishing spot", "catch some shrimp"), self.do_fish),
+            ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "nearby tree", "chop"),
+             self.do_chop),
+            ("firemaking", lambda: H("tinderbox", "light a fire"), self.do_fire),
+            ("cook shrimp", lambda: H("shrimp") and H("cook"), self.do_cook_shrimp),
+            ("dough", lambda: H("dough") and H("flour", "mix"), self.do_dough),
+            ("bake", lambda: H("range") and H("bread", "dough", "bake"), self.do_range),
+            ("run", lambda: H("run or walk", "running is faster", "fancy a run"), self.do_run),
+            ("smithing menu", lambda: H("smithing menu", "list of all the things"), self.do_dagger_menu),
+            ("anvil", lambda: H("anvil") and H("hammer"), self.do_anvil),
+            ("smelt", lambda: H("smelt") and H("furnace"), self.do_smelt),
+            ("mine", lambda: H("mine", "mining") and H("tin", "copper") and not H("bronze bar"), self.do_mine),
+            ("equipment stats", lambda: H("worn inventory") and not H("unequip", "holding your dagger"),
+             self.do_equipment_stats),
+            ("wield dagger", lambda: H("equipment stats") or (H("dagger") and H("wear", "wield", "equip")),
+             self.do_wield_dagger),
+            ("sword and shield", lambda: H("unequip"), self.do_sword_shield),
+            ("bow", lambda: H("bow") and H("arrows"), self.do_bow),
+            ("attack rat", lambda: H("rat") and H("slay", "attack"), self.do_attack_rat),
+            ("first kill", lambda: H("first kill"), self.do_after_kill),
+            ("bank", lambda: H("this is your bank"), self.do_close_bank),
+            ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
+            ("poll booth", lambda: H("poll booth") and not H("door"), self.do_poll),
+            ("ladder", lambda: H("ladder"), self.do_ladder),
+            ("door", lambda: H("door", "gate", "pass through", "continue through"), self.do_path),
+            ("walk to npc", lambda: H("follow the path", "find the"), self.do_talk),
             ("talk", lambda: True, self.do_talk),
         ]
         for name, cond, fn in R:
@@ -797,14 +911,19 @@ class BotExecutor(HumanMixin, Bot):
         """The yellow hint arrow in the game view (biggest yellow blob)."""
         sc = sc or self.client.get_screenshot()
         x1, y1, x2, y2 = VIEW
-        mask = hue_mask(sc.crop(VIEW), self.cfg.hint_color.value, self.cfg.hint_hue_tol.value)
+        mask = hue_mask(sc.crop(VIEW), self.cfg.hint_color.value, self.cfg.hint_hue_tol.value, 90, 190)
         mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
         num, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         best = None
         for i in range(1, num):
             x, y, w, h, area = (int(v) for v in stats[i])
-            if area < self.cfg.hint_min_pixels.value or w < 6 or h < 6 or w > 90 or h > 90:
+            if area < self.cfg.hint_min_pixels.value or w < 6 or h < 10 or w > 90 or h > 90:
                 continue
+            if w > 1.8 * h:
+                continue  # a word (the mouse-over text, yellow item names), not the arrow
+            ax, ay = x1 + x, y1 + y
+            if ay < 26 or (ax < 175 and ay < 75):
+                continue  # RuneLite's mouse-over line and the World Location panel
             if best is None or area > best[0]:
                 best = (area, MatchResult(x1 + x, y1 + y, x1 + x + w, y1 + y + h))
         return best[1] if best else None
@@ -825,16 +944,52 @@ class BotExecutor(HumanMixin, Bot):
                 best = (area, (box[0] + float(cent[i][0]), box[1] + float(cent[i][1])))
         return best[1] if best else None
 
+    def top_hover(self) -> str:
+        """The game's own mouse-over line in the top-left corner of the game view
+        ("Walk here", "Net Fishing spot / 2 more options"): crisp text on the world."""
+        sc = self.client.get_screenshot()
+        box = HOVER_LINE
+        a = np.asarray(sc.convert("RGB").crop(box), dtype=np.int16)
+        r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+        ink = (np.maximum(np.maximum(r, g), b) > 175) & ((np.minimum(np.minimum(r, g), b) > 175)
+                                                         | (np.abs(r - g) > 60) | (np.abs(g - b) > 60))
+        if ink.mean() < 0.01:
+            return ""
+        img = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8))
+        img = img.resize((img.width * 3, img.height * 3), Image.NEAREST)
+        try:
+            import pytesseract
+            from core.ocr import tess  # noqa: F401
+            t = pytesseract.image_to_string(img, lang="osrs_bold", config="--psm 7", timeout=6)
+        except Exception as e:
+            self.log.debug(f"top hover OCR failed: {e}")
+            return ""
+        return t.split("/")[0].strip()
+
     def hover_click(self, pt, wanted: list[str]) -> bool:
         self.client.move_to(pt)
-        time.sleep(random.uniform(0.06, 0.13))
+        time.sleep(random.uniform(0.08, 0.15))
         answers = self.client.get_hover_texts()
+        if not any(text_matches(a, w) for a in answers for w in wanted):
+            # the game's top-left line updates a frame later: give it a moment, and read it
+            # twice (the first read once still showed the previous spot's text)
+            time.sleep(random.uniform(0.15, 0.25))
+            top = self.top_hover()
+            if any(text_matches(top, w) for w in wanted):
+                time.sleep(0.12)
+                top2 = self.top_hover()
+                top = top2 if any(text_matches(top2, w) for w in wanted) else ""
+            answers = list(answers) + [top]
         if any(text_matches(a, w) for a in answers for w in wanted):
             click(-1, -1)
             self.log.info(f"Clicked {answers} for {wanted}")
             time.sleep(self.cfg.action_pause.choose())
             return True
-        self.log.debug(f"Mouse-over {answers} isn't {wanted}")
+        try:
+            mp = self.client.mouse_position()
+        except Exception:
+            mp = None
+        self.log.debug(f"Mouse-over {answers} isn't {wanted} (aimed {pt}, mouse {mp})")
         return False
 
     def hint_interact(self, wanted: list[str], search: bool = False) -> bool:
@@ -912,11 +1067,11 @@ class BotExecutor(HumanMixin, Bot):
     # ------------------------------------------------------------------ NPCs
     def find_npcs(self) -> list[MatchResult]:
         sc = self.client.get_screenshot()
-        arr = np.asarray(sc.convert("RGB").crop(VIEW), dtype=np.int16)
-        tol = self.cfg.color_tolerance.value
-        mask = np.zeros(arr.shape[:2], dtype=bool)
+        view = sc.convert("RGB").crop(VIEW)
+        mask = np.zeros((view.height, view.width), dtype=bool)
         for c in self.cfg.npc_colors.value:
-            mask |= np.all(np.abs(arr - np.array(c.value)) <= tol, axis=2)
+            # by hue: the hull is drawn see-through, cyan shows as (0,160,160)..(0,255,255)
+            mask |= hue_mask(view, c.value, 8, 150, 110)
         mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
         num, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         px, py = self._player_point()
@@ -931,18 +1086,18 @@ class BotExecutor(HumanMixin, Bot):
         found.sort(key=lambda t: t[0])
         return [m for _, m in found]
 
-    def click_npc(self, wanted: list[str], verb_any: bool = False) -> bool:
-        for m in self.find_npcs()[:6]:
-            inner = m.scale_px(-max(2, min(m.width, m.height) // 5))
-            for _ in range(2):
+    def click_npc(self, wanted: list[str], verb_any: bool = False, search: bool = True) -> bool:
+        for m in self.find_npcs()[:8]:
+            inner = m.scale_px(-max(1, min(m.width, m.height) // 5)) if min(m.width, m.height) > 12 else m
+            for _ in range(3):
                 if self.hover_click(inner.get_point_within(), wanted):
                     return True
         # NPC not highlighted / off screen: the hint arrow may stand over it
-        return self.hint_interact(wanted, search=True)
+        return self.hint_interact(wanted, search=search)
 
     def talk(self, names: list[str]) -> bool:
         wanted = [f"Talk-to {n}" for n in names]
-        if self.click_npc(wanted):
+        if self.click_npc(wanted, search=False):
             self.sleep_checked(random.uniform(1.2, 2.5))
             return True
         self.walk_to_hint()
