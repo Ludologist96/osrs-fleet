@@ -104,6 +104,7 @@ CHAT_BOX = (0, 338, 520, 476)
 # steps after which the character keeps busy on its own for a while (an alt-tab fits)
 ALT_TAB_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "bake", "mine", "smelt",
                  "anvil", "smithing menu", "attack rat", "bow", "magic: cast", "waiting"}
+DAGGER_CELL = (28, 52, 86, 94)  # first cell of the smithing menu (window coords)
 # never clicked even when the fuzzy match says yes ("Cast Minigame Teleport" ~ "Cast Home Teleport")
 HOVER_NEVER = ("minigame",)
 SIDE_PANEL = (548, 205, 740, 465)
@@ -845,11 +846,14 @@ class BotExecutor(HumanMixin, Bot):
     def do_dagger_menu(self, t):
         sc = self.client.get_screenshot()
         ln = find_line(sc, "Dagger", VIEW, min_ratio=0.8)
-        if not ln:
-            self.log.info("Smithing menu: 'Dagger' not found")
-            return
-        # the item icon is above its name: click the name/icon area
-        box = {"x1": ln["x1"] - 4, "y1": ln["y1"] - 22, "x2": ln["x2"] + 4, "y2": ln["y2"]}
+        if ln:
+            # the item icon is above its name: click the name/icon area
+            box = {"x1": ln["x1"] - 4, "y1": ln["y1"] - 22, "x2": ln["x2"] + 4, "y2": ln["y2"]}
+        else:
+            # OCR missed it (small text on a dark grid): the dagger is always the first
+            # cell of the smithing menu (measured on the fleet: cell ~ (20,47)-(94,100))
+            self.log.info("Smithing menu: 'Dagger' not read - clicking the first cell")
+            box = dict(zip(("x1", "y1", "x2", "y2"), DAGGER_CELL))
         self._click_box(box)
         self.sleep_checked(random.uniform(3, 4.5))
 
