@@ -650,7 +650,8 @@ class BotExecutor(HumanMixin, Bot):
             ("smithing menu", lambda: H("smithing menu", "list of all the things"), self.do_dagger_menu),
             ("anvil", lambda: H("anvil") and H("hammer"), self.do_anvil),
             ("smelt", lambda: H("smelt") and H("furnace"), self.do_smelt),
-            ("mine", lambda: H("mine", "mining") and H("tin", "copper") and not H("bronze bar"), self.do_mine),
+            ("mine", lambda: H("mine", "mining") and H("tin", "copper", "rock", "some tn") and not H("bronze bar"),
+             self.do_mine),
             ("wield dagger", lambda: (H("equipment stats", "combined statistics") or (H("dagger") and H("wear", "wield")))
              and not H("unequip", "holding your dagger"), self.do_wield_dagger),
             ("equipment stats", lambda: H("worn inventory", "shield and helmet") and H("equip", "worn", "helmet")
