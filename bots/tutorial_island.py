@@ -453,8 +453,6 @@ class BotExecutor(HumanMixin, Bot):
         self._blue_title = blue >= 80
         if self._is_dialogue(chat.lower()):
             return chat
-        if blue >= 80 and len(re.sub(r"[^a-z]", "", chat.lower())) >= 30:
-            return chat
         self._ocr_region(sc, OVERLAY_BOX, "overlay")
         # the World Location panel (Tile / Chunk ID / Region ID, white) sits in the same
         # corner when there is no instruction box: drop its lines and number-only lines
@@ -462,7 +460,19 @@ class BotExecutor(HumanMixin, Bot):
                 if not has(l["text"], "chunk", "region", "tile")
                 and len(re.sub(r"[^a-zA-Z]", "", l["text"])) >= 4]
         over = " ".join(l["text"] for l in keep)
-        if len(re.sub(r"[^a-z]", "", over.lower())) >= 20:
+        over_ok = len(re.sub(r"[^a-z]", "", over.lower())) >= 20
+        if blue >= 80 and len(re.sub(r"[^a-z]", "", chat.lower())) >= 30:
+            # the parchment box usually is the current step; but sometimes it stays on an
+            # explanation ("This is your combat interface...") while the top-left box
+            # already says what to do ("Enter the cage... attack a rat"): an overlay with a
+            # real action wins over a chat box that only says "talk"
+            if over_ok and self._rule(chat.lower())[0] == "talk" and \
+                    self._rule(over.lower())[0] not in ("talk", "walk to npc"):
+                self._chat_lines = keep
+                self._from_overlay = True
+                return over
+            return chat
+        if over_ok:
             self._chat_lines = keep
             self._from_overlay = True
             return over
@@ -658,7 +668,7 @@ class BotExecutor(HumanMixin, Bot):
              self.do_wind_strike),
             ("mainland", lambda: H("mainland"), self.do_mainland),
             ("fishing", lambda: H("fishing spot", "catch some shrimp", "to catch"), self.do_fish),
-            ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "nearby tree", "chop"),
+            ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "chop") or (H("nearby tree") and H("tree")),
              self.do_chop),
             ("firemaking", lambda: H("tinderbox", "light a fire"), self.do_fire),
             ("cook shrimp", lambda: H("cook") and H("shrimp", "on a fire", "ona fire", "cook them")
