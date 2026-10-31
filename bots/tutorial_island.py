@@ -66,7 +66,7 @@ class BotConfig(BotConfigMixin):
     hint_color: RGBParam = RGBParam(255, 255, 0)
     hint_hue_tol: IntParam = IntParam(8)
     hint_min_pixels: IntParam = IntParam(150)      # in the game view (arrow ~250 px)
-    hint_min_pixels_minimap: IntParam = IntParam(14)  # minimap arrow (NPC dots are ~4 px)
+    hint_min_pixels_minimap: IntParam = IntParam(30)  # minimap arrow (NPC dots are ~4 px)
     # How far below the arrow's tip the mouse-over search goes (px).
     hint_search_depth: IntParam = IntParam(110)
 
@@ -87,7 +87,7 @@ class BotConfig(BotConfigMixin):
     max_same: IntParam = IntParam(8)               # tries on one instruction before "stuck"
     max_unknown: IntParam = IntParam(25)           # looks with no instruction/dialogue before "stuck"
     fight_timeout: FloatParam = FloatParam(90.0)
-    hover_search_points: IntParam = IntParam(40)   # mouse-over search around the character
+    hover_search_points: IntParam = IntParam(70)   # mouse-over search around the character
 
     # --- habits (small, it's a short run) ---
     camera_chance: FloatParam = FloatParam(0.04)   # after a finished step
@@ -110,17 +110,18 @@ class BotConfig(BotConfigMixin):
 # Fixed layout, window coords (= canvas coords on the fleet).
 CHAT_BOX = (0, 338, 520, 476)
 SIDE_PANEL = (548, 205, 740, 465)
-TAB_ROWS = ((521, 168, 752, 204), (521, 466, 752, 502))
-TAB_W = 33
+TAB_ROWS = ((527, 168, 765, 204), (527, 466, 765, 502))  # 7 tabs of 34 px (measured)
+TAB_W = 34
 VIEW = (4, 4, 512, 334)  # game view
 OVERLAY_BOX = (4, 22, 330, 160)
-HOVER_LINE = (4, 4, 360, 24)  # the game's mouse-over text, top-left of the view  # some instructions show in a dark box top-left of the view
+HOVER_LINE = (4, 4, 360, 24)
+MINIMAP_C, MINIMAP_R = (652, 81), 70  # round minimap (fixed layout, measured)  # the game's mouse-over text, top-left of the view  # some instructions show in a dark box top-left of the view
 # tab name -> template (data/ui) and words in the instruction that point to it
 TABS = {
     "settings": ("data/ui/settings.webp", ("spanner", "settings")),
-    "inventory": ("data/ui/inventory.webp", ("backpack", "inventory")),
-    "skills": ("data/ui/stats.webp", ("bar graph", "skills menu")),
     "quests": ("data/ui/quests.webp", ("quest journal", "left of your inventory", "quest")),
+    "inventory": ("data/ui/inventory.webp", ("backpack",)),
+    "skills": ("data/ui/stats.webp", ("bar graph", "skills menu")),
     "equipment": ("data/ui/equipment.webp", ("icon of a man", "worn")),
     "combat": ("data/ui/combat.webp", ("crossed swords", "combat interface")),
     "account": ("data/ui/account.webp", ("account management",)),
@@ -141,6 +142,34 @@ NPC_WORDS = [("gielinor guide", "Gielinor Guide"), ("survival", "Survival Expert
 # Tutorial Island (surface and the caves) in world tiles; outside = on the mainland.
 ISLAND = ((3040, 3040, 3170, 3145), (3040, 9480, 3170, 9545))
 HOVER_SIM = 0.72
+HINT_ARROW = np.array([[c == "#" for c in row] for row in (
+    "...........................",
+    "...........................",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "..........#######..........",
+    "...#####################...",
+    "....###################....",
+    ".....#################.....",
+    "......###############......",
+    ".......#############.......",
+    "........###########........",
+    ".........#########.........",
+    "..........#######..........",
+    "...........#####...........",
+    "............###............",
+    "...........................",
+)], dtype=np.float32)  # the hint arrow sprite
 BAR_GREEN, BAR_RED, BAR_TOL = (0, 146, 54), (102, 15, 16), 30
 
 
@@ -160,6 +189,10 @@ def text_matches(text: str, wanted: str) -> bool:
     if not text:
         return False
     verb, _, name = wanted.lower().partition(" ")
+    if verb.startswith("climb-"):
+        # up and down must not be mixed up (a whole-text match would accept either)
+        if ("down" in verb) != ("down" in text or "dawn" in text or "d0wn" in text):
+            return False
     if re.search(r"\b[o0]ak\b", text) and "oak" not in wanted.lower():
         return False  # oak trees on the island need level 15 woodcutting
     if verb != "*" and "*" not in name and len(text) >= 6 and \
@@ -565,7 +598,7 @@ class BotExecutor(HumanMixin, Bot):
             ("bank", lambda: H("this is your bank"), self.do_close_bank),
             ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
             ("poll booth", lambda: H("poll booth") and not H("door"), self.do_poll),
-            ("ladder", lambda: H("ladder"), self.do_ladder),
+            ("ladder", lambda: H("ladder", "enter some caves", "go down to", "indicated ladder"), self.do_ladder),
             ("door", lambda: H("door", "gate", "pass through", "continue through"), self.do_path),
             ("walk to npc", lambda: H("follow the path", "find the"), self.do_talk),
             ("talk", lambda: True, self.do_talk),
@@ -610,10 +643,11 @@ class BotExecutor(HumanMixin, Bot):
                 break
         if "open up the magic" in t:
             want = "spells"
-        self.log.info(f"Tab: {want or 'the flashing one'}")
-        if want and self.click_tab(want):
+        self.log.info(f"Tab: the flashing one (text says {want})")
+        if self.click_flashing_tab():
             return
-        self.click_flashing_tab()
+        if want:
+            self.click_tab(want)
 
     def do_talk(self, t):
         npc = None
@@ -625,14 +659,31 @@ class BotExecutor(HumanMixin, Bot):
         self.talk(names)
 
     def do_path(self, t):
-        verbs = ["Open Door", "Open Gate", "Climb-down Ladder", "Climb-up Ladder", "Enter *"]
+        verbs = ["Open Door", "Open Gate"]
         if self.hint_interact(verbs):
             return
         self.walk_to_hint()
 
     def do_ladder(self, t):
-        up = "up" in t and "down" not in t
-        verbs = ["Climb-up Ladder"] if up else ["Climb-down Ladder", "Climb-up Ladder"]
+        # "go down to the caves" / "climb the ladder (up)" ; upstairs by mistake -> go down
+        tile = self.my_tile()
+        down = has(t, "go down", "downto", "caves") or (tile is not None and tile[1] < 9000)
+        verbs = ["Climb-down Ladder", "Climb-down Staircase"] if down else ["Climb-up Ladder"]
+        if tile is not None and tile[2] > 0 and tile[1] < 9000:
+            # upstairs (a ladder in the quest house goes up too): the top of that ladder is
+            # where the character stands - look for "Climb-down" in menus around it
+            self.log.info(f"Upstairs (tile {tile}): looking for the way down around the character")
+            if self.same % 2 == 1:
+                # step aside first (the character may stand on the ladder's top and hide it)
+                ang = random.uniform(0, 2 * math.pi)
+                d = random.uniform(10, 16)
+                self.client.click((int(MINIMAP_C[0] + d * math.cos(ang)), int(MINIMAP_C[1] + d * math.sin(ang))))
+                self.log.info("Stepped aside via the minimap")
+                self.sleep_checked(random.uniform(2.5, 3.5))
+            # the arrow only shows where the ladder downstairs is: search the whole room
+            if self.hover_search(verbs + ["Climb-down *"]):
+                self.sleep_checked(random.uniform(2.0, 3.0))
+            return
         if not self.hint_interact(verbs, search=True):
             self.walk_to_hint()
 
@@ -936,54 +987,62 @@ class BotExecutor(HumanMixin, Bot):
         x1, y1, x2, y2 = VIEW
         return (x1 + x2) // 2, (y1 + y2) // 2 + 8
 
-    def find_hint(self, sc=None) -> MatchResult | None:
-        """The yellow hint arrow in the game view (biggest yellow blob)."""
-        sc = sc or self.client.get_screenshot()
-        x1, y1, x2, y2 = VIEW
-        # the arrow is pure yellow (255,255,~60); gold door frames etc. stay below ~200
-        mask = hue_mask(sc.crop(VIEW), self.cfg.hint_color.value, 4, 150, 235)
-        # under the dark instruction box (top-left) it is dimmed to ~half
-        ox1, oy1, ox2, oy2 = OVERLAY_BOX
-        hsv = cv2.cvtColor(np.asarray(sc.convert("RGB").crop((ox1, oy1, ox2, oy2))), cv2.COLOR_RGB2HSV)
-        dim = (np.abs(hsv[:, :, 0].astype(np.int16) - 27) <= 4) & (hsv[:, :, 1] >= 90) & \
-              (hsv[:, :, 2] >= 75) & (hsv[:, :, 2] <= 140)
-        mask[oy1 - y1:oy2 - y1, ox1 - x1:ox2 - x1] |= dim[: oy2 - oy1, : ox2 - ox1]
-        raw = mask
-        mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
-        num, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    def find_hint(self, sc=None, looks: int = 4) -> MatchResult | None:
+        """The hint arrow flashes: look at a few frames before saying there is none."""
+        for k in range(looks):
+            m = self._find_hint_once(sc if k == 0 else None)
+            if m is not None:
+                return m
+            time.sleep(random.uniform(0.15, 0.25))
+        return None
+
+    def _find_hint_once(self, sc=None) -> MatchResult | None:
+        """The tutorial's yellow hint arrow: a fixed-size sprite, found by matching its shape
+        (HINT_ARROW) in the yellow pixels of the game view; under the dark instruction box
+        (top-left) the arrow is dimmed, so there the dim yellow is matched too. Door frames
+        and other yellow things score <= 0.65, the arrow ~1.0 (measured on the island)."""
+        sc = (sc or self.client.get_screenshot()).convert("RGB")
         best = None
-        for i in range(1, num):
-            x, y, w, h, area = (int(v) for v in stats[i])
-            if area < self.cfg.hint_min_pixels.value or w < 6 or h < 10 or w > 90 or h > 90:
+        for dim, box in ((False, VIEW), (True, OVERLAY_BOX)):
+            hsv = cv2.cvtColor(np.asarray(sc.crop(box)), cv2.COLOR_RGB2HSV)
+            dh = np.abs(hsv[:, :, 0].astype(np.int16) - 29)
+            if dim:
+                m = (dh <= 5) & (hsv[:, :, 1] >= 60) & (hsv[:, :, 2] >= 75) & (hsv[:, :, 2] <= 150)
+            else:
+                m = (dh <= 5) & (hsv[:, :, 1] >= 40) & (hsv[:, :, 2] >= 200)
+            if m.shape[0] < HINT_ARROW.shape[0] or m.shape[1] < HINT_ARROW.shape[1]:
                 continue
-            # the arrow is a solid shape (~40% of its box yellow); door/window frames are
-            # thin outlines (10-25%)
-            fill = float((raw[y:y + h, x:x + w] & (lab[y:y + h, x:x + w] == i)).sum()) / (w * h)
-            if fill < 0.3:
-                continue
-            if w > 1.8 * h:
-                continue  # a word (the mouse-over text, yellow item names), not the arrow
-            ax, ay = x1 + x, y1 + y
-            if ay < 24:
-                continue  # RuneLite's mouse-over line
-            if best is None or area > best[0]:
-                best = (area, MatchResult(x1 + x, y1 + y, x1 + x + w, y1 + y + h))
+            r = cv2.matchTemplate(m.astype(np.float32), HINT_ARROW, cv2.TM_CCORR_NORMED)
+            _, mx, _, loc = cv2.minMaxLoc(r)
+            self.log.debug(f"Hint arrow match {'dim' if dim else 'bright'}: {mx:.2f} at {loc}")
+            if mx >= 0.8 and (best is None or mx > best[0]):
+                x, y = loc[0] + box[0], loc[1] + box[1]
+                best = (mx, MatchResult(x + 3, y + 2, x + HINT_ARROW.shape[1] - 3, y + HINT_ARROW.shape[0] - 2))
         return best[1] if best else None
 
     def find_minimap_hint(self, sc=None) -> tuple[float, float] | None:
         sc = sc or self.client.get_screenshot()
-        try:
-            mm = self.client.minimap.map
-            box = mm.bounding_box
-        except Exception:
-            return None
-        mask = hue_mask(sc.crop(box), self.cfg.hint_color.value, self.cfg.hint_hue_tol.value, 120, 120)
+        box = (MINIMAP_C[0] - MINIMAP_R, MINIMAP_C[1] - MINIMAP_R, MINIMAP_C[0] + MINIMAP_R, MINIMAP_C[1] + MINIMAP_R)
+        # the minimap arrow is red (seen on the island; ground items are 2-3 px red dots),
+        # sometimes yellow
+        crop = sc.convert("RGB").crop(box)
+        hsv = cv2.cvtColor(np.asarray(crop), cv2.COLOR_RGB2HSV)
+        hh = hsv[:, :, 0].astype(np.int16)
+        red = ((hh <= 6) | (hh >= 174)) & (hsv[:, :, 1] >= 150) & (hsv[:, :, 2] >= 150)
+        mask = red | hue_mask(crop, self.cfg.hint_color.value, self.cfg.hint_hue_tol.value, 120, 120)
         num, _, stats, cent = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
         best = None
+        cx, cy = MINIMAP_C  # the detected minimap box was 16 px off on the island
+        r = MINIMAP_R
         for i in range(1, num):
             area = int(stats[i][4])
+            px, py = box[0] + float(cent[i][0]), box[1] + float(cent[i][1])
+            if math.hypot(px - cx, py - cy) > r:
+                continue  # outside the round map (orbs, compass)
             if area >= self.cfg.hint_min_pixels_minimap.value and (best is None or area > best[0]):
-                best = (area, (box[0] + float(cent[i][0]), box[1] + float(cent[i][1])))
+                best = (area, (px, py))
+        if best:
+            self.log.debug(f"Minimap hint at {best[1]} ({best[0]} px; map centre {cx},{cy} r {r:.0f})")
         return best[1] if best else None
 
     def top_hover(self) -> str:
@@ -1006,7 +1065,7 @@ class BotExecutor(HumanMixin, Bot):
         except Exception as e:
             self.log.debug(f"top hover OCR failed: {e}")
             return ""
-        return t.split("/")[0].strip()
+        return t.strip()
 
     def hover_click(self, pt, wanted: list[str]) -> bool:
         self.client.move_to(pt)
@@ -1032,6 +1091,9 @@ class BotExecutor(HumanMixin, Bot):
         except Exception:
             mp = None
         self.log.debug(f"Mouse-over {answers} isn't {wanted} (aimed {pt}, mouse {mp})")
+        if getattr(self, "_menu_ok", False) and any("option" in (a or "").lower() for a in answers):
+            # something else is on top here ("Walk here / 2 more options"): look in the menu
+            return self.menu_pick(wanted)
         return False
 
     def hint_interact(self, wanted: list[str], search: bool = False) -> bool:
@@ -1042,18 +1104,74 @@ class BotExecutor(HumanMixin, Bot):
         if hint is not None:
             cx = (hint.start_x + hint.end_x) // 2
             depth = self.cfg.hint_search_depth.value
-            for dy in range(6, depth, 9):
-                pt = (cx + random.randint(-4, 4), min(VIEW[3] - 2, hint.end_y + dy))
-                if self.hover_click(pt, wanted):
-                    return True
+            self._menu_ok = True
+            try:
+                for dy in range(6, depth, 9):
+                    pt = (cx + random.randint(-4, 4), min(VIEW[3] - 2, hint.end_y + dy))
+                    if self.hover_click(pt, wanted):
+                        return True
+            finally:
+                self._menu_ok = False
             self.log.info(f"Hint arrow at {hint.bounding_box}: nothing {wanted} under it")
+            near = math.hypot(cx - self._player_point()[0], hint.end_y - self._player_point()[1]) < 70
+            if near or self.same >= 1:
+                # right next to us and still nothing: a wall hides it - look from the other side
+                self.log.info("Turning the camera (a wall may hide it)")
+                try:
+                    self.camera.rotate(random.uniform(1.1, 1.6))
+                except Exception:
+                    self.log.debug("camera turn failed", exc_info=True)
+                time.sleep(random.uniform(0.4, 0.7))
+                return False
             # far away: walk to it
             self.client.click((cx + random.randint(-5, 5), min(VIEW[3] - 2, hint.end_y + random.randint(25, 45))))
             self._walked = True
             self.sleep_checked(random.uniform(2.0, 3.5))
             return False
         if search:
+            # off screen but the minimap points to it: walk there first (searching the
+            # screen with the mouse is slow)
+            if self.find_minimap_hint() is not None:
+                self.walk_to_hint()
+                return False
             return self.hover_search(wanted)
+        return False
+
+    def menu_pick(self, wanted: list[str]) -> bool:
+        """Right-click where the mouse is, read the menu line by line, click a wanted entry;
+        otherwise move away so the menu closes."""
+        from core import ocr
+        click(-1, -1, click_type=ClickType.RIGHT)
+        time.sleep(random.uniform(0.2, 0.35))
+        try:
+            sc = self.client.get_screenshot()
+            menu = self.client.get_right_click_menu(sc)
+        except Exception as e:
+            self.log.debug(f"No right-click menu: {e}")
+            return False
+        n = max(1, round((menu.height - 19) / 15))
+        seen = []
+        for i in range(n):
+            y1 = menu.start_y + 19 + i * 15
+            row = MatchResult(menu.start_x + 3, y1, menu.end_x - 3, y1 + 15)
+            img = tools.mask_above_color_value(row.crop_in(sc), 150)
+            try:
+                text = ocr.execute(img, font=ocr.FontChoice.RUNESCAPE_BOLD_12,
+                                   psm=ocr.TessPsm.SINGLE_LINE, raise_on_blank=False).strip()
+            except Exception:
+                text = ""
+            seen.append(text)
+            if any(text_matches(text, w) for w in wanted):
+                target = MatchResult(row.start_x + 4, y1 + 3, min(row.end_x - 4, row.start_x + 90), y1 + 12)
+                self.client.move_to(target.get_point_within(), rand_move_chance=0)
+                click(-1, -1)
+                self.log.info(f"Menu {seen}: picked '{text}'")
+                time.sleep(self.cfg.action_pause.choose())
+                return True
+        self.log.debug(f"Menu {seen}: nothing {wanted}")
+        x = menu.end_x + random.randint(30, 60) if menu.end_x + 70 < VIEW[2] else menu.start_x - random.randint(30, 60)
+        self.client.move_to((max(8, x), random.randint(menu.start_y, menu.end_y)))
+        time.sleep(random.uniform(0.2, 0.35))
         return False
 
     def hover_search(self, wanted: list[str]) -> bool:
@@ -1067,11 +1185,15 @@ class BotExecutor(HumanMixin, Bot):
                 x, y = int(px + r * math.cos(a)), int(py + r * 0.75 * math.sin(a))
                 if VIEW[0] + 4 < x < VIEW[2] - 4 and VIEW[1] + 4 < y < VIEW[3] - 4:
                     pts.append((x, y))
-        for pt in pts[: self.cfg.hover_search_points.value]:
-            if self.terminate:
-                raise ScriptTerminationException()
-            if self.hover_click(pt, wanted):
-                return True
+        self._menu_ok = True
+        try:
+            for pt in pts[: self.cfg.hover_search_points.value]:
+                if self.terminate:
+                    raise ScriptTerminationException()
+                if self.hover_click(pt, wanted):
+                    return True
+        finally:
+            self._menu_ok = False
         self.log.info(f"Mouse-over search: no {wanted} around the character")
         return False
 
@@ -1096,11 +1218,10 @@ class BotExecutor(HumanMixin, Bot):
         if mh is None:
             self.log.info("No hint arrow on the screen or the minimap")
             return False
-        mm = self.client.minimap.map
-        cx, cy = mm.get_center()
+        cx, cy = MINIMAP_C
         dx, dy = mh[0] - cx, mh[1] - cy
         d = math.hypot(dx, dy)
-        r = min(mm.width, mm.height) / 2 - 12
+        r = MINIMAP_R - 10
         k = min(1.0, r / d) if d else 0
         pt = (int(cx + dx * k + random.uniform(-3, 3)), int(cy + dy * k + random.uniform(-3, 3)))
         self.log.info(f"Walking toward the minimap hint arrow ({pt})")
