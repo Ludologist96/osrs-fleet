@@ -126,6 +126,19 @@ def bot_rl_settings(bot: str, cfg: dict, current: dict) -> dict:
            # minimap at a known zoom: walking clicks it at 4 px per tile (slot 8 had 2.0
            # and every walk went twice as far as wanted)
            "minimap.zoom": "true", "minimap.zoomLevel": "4.0"}
+    if bot == "tutorial_island":
+        # the tutorial bot talks to these NPCs (cyan hulls), fights rats/a chicken
+        # (Opponent Information health bar) and checks it reached the mainland (tile)
+        want = dict(loc)
+        want.update({"runelite.npcindicatorsplugin": "true", "npcindicators.highlightHull": "true",
+                     "npcindicators.npcToHighlight": ", ".join([
+                         "Gielinor Guide", "Survival Expert", "Master Chef", "Quest Guide",
+                         "Mining Instructor", "Combat Instructor", "Account Guide", "Brother Brace",
+                         "Magic Instructor", "Giant rat", "Chicken", "Fishing spot"]),
+                     "npcindicators.npcColor": _argb((0, 255, 255)),
+                     "runelite.opponentinfoplugin": "true",
+                     "opponentinfo.showOpponentHealthOverlay": "true"})
+        return want
     if bot not in ("slayer", "woodcutter"):
         return {}
     if bot == "woodcutter":
