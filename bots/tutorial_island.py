@@ -562,6 +562,16 @@ class BotExecutor(HumanMixin, Bot):
     def _dialogue(self, low: str, sc) -> bool:
         if self._options(low):
             return self._choose_option()
+        # right after picking an option the character says it ("Nope, I'm ready to move
+        # on!") - a dialogue line even when OCR loses its "Click here to continue"
+        opt = getattr(self, "_last_option", "")
+        if opt and not getattr(self, "_from_overlay", False) and tools.text_similarity(re.sub(r"[^a-z ]", "", low)[:len(opt) + 6], opt) > 0.6:
+            self._last_option = ""
+            time.sleep(self.cfg.continue_pause.choose())
+            keyboard.press_and_release("space")
+            self.log.debug(f"Dialogue: space (our own answer {opt!r})")
+            time.sleep(random.uniform(0.3, 0.6))
+            return True
         # "Click here to continue" is blue at the bottom of the chat box (OCR sometimes
         # loses the words; the instruction box only has its blue title at the top)
         a = np.asarray(sc.convert("RGB").crop((60, 445, 460, 472)), dtype=np.int16)
@@ -608,6 +618,7 @@ class BotExecutor(HumanMixin, Bot):
         if pick is None:
             pick = next((i for i, t in enumerate(texts) if not any(n in t for n in never)), 0)
         self.log.info(f"Options {[o['text'] for o in options]}: choosing {pick + 1}")
+        self._last_option = re.sub(r"[^a-z ]", "", texts[pick])
         time.sleep(self.cfg.continue_pause.choose())
         if idx >= 0 and random.random() < 0.5:  # (without the header the number may be off)
             keyboard.press_and_release(str(pick + 1))
