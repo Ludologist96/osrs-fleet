@@ -642,7 +642,8 @@ class BotExecutor(HumanMixin, Bot):
             ("woodcutting", lambda: H("need some logs", "cut down", "cutting it down", "nearby tree", "chop"),
              self.do_chop),
             ("firemaking", lambda: H("tinderbox", "light a fire"), self.do_fire),
-            ("cook shrimp", lambda: H("shrimp") and H("cook"), self.do_cook_shrimp),
+            ("cook shrimp", lambda: H("cook") and H("shrimp", "on a fire", "ona fire", "cook them")
+             and not H("dough", "bread", "range", "chef"), self.do_cook_shrimp),
             ("dough", lambda: H("dough") and H("flour", "mix"), self.do_dough),
             ("bake", lambda: H("range") and H("bread", "dough", "bake"), self.do_range),
             ("run", lambda: H("run or walk", "running is faster", "fancy a run"), self.do_run),
