@@ -633,6 +633,7 @@ class BotExecutor(HumanMixin, Bot):
         R = [
             ("appearance", lambda: H("appearance") and H("character"), self.do_appearance),
             ("waiting", lambda: H("please wait", "sit back", "attempting to", "bar over your head"), self.do_wait),
+            ("run", lambda: H("run or walk", "running is faster", "fancy a run"), self.do_run),
             ("tab", lambda: (H("flashing") and not H("arrow", "yellow", "indicated")) or H("open up the magic"), self.do_tab),
             ("go on", lambda: H("want a recap"), self.do_path),
             ("magic: cast", lambda: H("wind strike", "magic casting", "now have some runes", "runes to cast", "on a chicken"),
@@ -646,7 +647,6 @@ class BotExecutor(HumanMixin, Bot):
              and not H("dough", "bread", "range", "chef"), self.do_cook_shrimp),
             ("dough", lambda: H("dough") and H("flour", "mix"), self.do_dough),
             ("bake", lambda: H("range") and H("bread", "dough", "bake"), self.do_range),
-            ("run", lambda: H("run or walk", "running is faster", "fancy a run"), self.do_run),
             ("smithing menu", lambda: H("smithing menu", "list of all the things"), self.do_dagger_menu),
             ("anvil", lambda: H("anvil") and H("hammer"), self.do_anvil),
             ("smelt", lambda: H("smelt") and H("furnace"), self.do_smelt),
