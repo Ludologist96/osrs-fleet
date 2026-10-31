@@ -197,6 +197,12 @@ def text_matches(text: str, wanted: str) -> bool:
             return False
     if re.search(r"\b[o0]ak\b", text) and "oak" not in wanted.lower():
         return False  # oak trees on the island need level 15 woodcutting
+    if verb == "talk-to" and name:
+        # NPC names share "Instructor"/"Guide": the distinctive first word must be there
+        # ("Talk-to Mining Instructor" scored 0.8 against "Talk-to Combat Instructor")
+        key = name.split()[0]
+        if not any(SequenceMatcher(None, w, key).ratio() >= 0.6 for w in re.findall(r"[a-z]+", text)):
+            return False
     if verb != "*" and "*" not in name and len(text) >= 6 and \
             SequenceMatcher(None, text[:len(wanted) + 3], wanted.lower()).ratio() >= 0.8:
         return True  # whole text close enough ("Nat Fishing spot" = "Net Fishing spot")
@@ -672,8 +678,7 @@ class BotExecutor(HumanMixin, Bot):
             ("sword and shield", lambda: H("unequip"), self.do_sword_shield),
             ("bow", lambda: H("bow") and H("arrows"), self.do_bow),
             ("attack rat", lambda: H("rat") and H("slay", "attack"), self.do_attack_rat),
-            ("first kill", lambda: H("first kill", "gate and talk") or (H("made your first") and H("kill", "rat")),
-             self.do_after_kill),
+            ("first kill", lambda: H("first kill", "gate and talk", "made your first kill"), self.do_after_kill),
             ("bank", lambda: H("this is your bank"), self.do_close_bank),
             ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
             ("poll booth", lambda: H("poll booth") and not H("door"), self.do_poll),
