@@ -364,6 +364,16 @@ class BotExecutor(HumanMixin, Bot):
                 self.log.info(f"No instruction or dialogue seen ({self.unknown}/{self.cfg.max_unknown.value})")
                 self._shot("no-text")
                 self._close_interface()
+                # after a relogin the instruction box stays empty until the next step:
+                # talking to the highlighted instructor brings the text back
+                if self.unknown in (5, 15):
+                    self.log.info("No text: talking to the nearest highlighted instructor")
+                    try:
+                        self.do_talk("")
+                    except ScriptTerminationException:
+                        raise
+                    except Exception:
+                        self.log.debug("talk without text failed", exc_info=True)
             if self.unknown > self.cfg.max_unknown.value:
                 self.log.error("Nothing readable for too long. Stopping.")
                 self.exit_reason = "stuck"
