@@ -390,6 +390,9 @@ class BotExecutor(HumanMixin, Bot):
         self.set_activity(name)
         self.log.info(f"Step '{name}' (try {self.same + 1})")
         self._walked = False
+        if self._selected_any():
+            self.log.info("An item was left selected: cancelling it")
+            self._deselect()
         try:
             handler(low)
         except ScriptTerminationException:
@@ -597,14 +600,14 @@ class BotExecutor(HumanMixin, Bot):
             ("anvil", lambda: H("anvil") and H("hammer"), self.do_anvil),
             ("smelt", lambda: H("smelt") and H("furnace"), self.do_smelt),
             ("mine", lambda: H("mine", "mining") and H("tin", "copper") and not H("bronze bar"), self.do_mine),
-            ("equipment stats", lambda: H("worn inventory") and not H("unequip", "holding your dagger"),
+            ("wield dagger", lambda: (H("equipment stats", "combined statistics") or (H("dagger") and H("wear", "wield")))
+             and not H("unequip", "holding your dagger"), self.do_wield_dagger),
+            ("equipment stats", lambda: H("worn inventory", "shield and helmet") and not H("unequip", "holding your dagger"),
              self.do_equipment_stats),
-            ("wield dagger", lambda: H("equipment stats") or (H("dagger") and H("wear", "wield", "equip")),
-             self.do_wield_dagger),
             ("sword and shield", lambda: H("unequip"), self.do_sword_shield),
             ("bow", lambda: H("bow") and H("arrows"), self.do_bow),
             ("attack rat", lambda: H("rat") and H("slay", "attack"), self.do_attack_rat),
-            ("first kill", lambda: H("first kill"), self.do_after_kill),
+            ("first kill", lambda: H("first kill", "made your first", "gate and talk"), self.do_after_kill),
             ("bank", lambda: H("this is your bank"), self.do_close_bank),
             ("bank booth", lambda: H("bank of gielinor", "front of the building"), self.do_bank_booth),
             ("poll booth", lambda: H("poll booth") and not H("door"), self.do_poll),
@@ -647,8 +650,9 @@ class BotExecutor(HumanMixin, Bot):
 
     def do_tab(self, t):
         want = None
-        for name, (_, keys) in TABS.items():
-            if any(k in t for k in keys):
+        for name in ("equipment", "combat", "quests", "skills", "settings", "account", "prayer",
+                     "friends", "spells", "music", "emotes", "inventory"):
+            if has(t, *TABS[name][1]):
                 want = name
                 break
         if "open up the magic" in t:
@@ -797,25 +801,112 @@ class BotExecutor(HumanMixin, Bot):
     def do_sword_shield(self, t):
         self._close_interface()
         self.ensure_tab("inventory")
-        if not self._inv_item("Bronze sword"):
-            self.talk(["Combat Instructor"])
-            return
         self._wield(["Bronze sword", "Wooden shield"])
 
     def do_bow(self, t):
         self.ensure_tab("inventory")
-        if self._inv_item("Shortbow") or self._inv_item("Bronze arrow"):
-            self._wield(["Shortbow", "Bronze arrow"])
+        self._wield(["Shortbow", "Bronze arrow"])
         self.attack_rat()
 
     def do_attack_rat(self, t):
         self.attack_rat()
 
     def do_after_kill(self, t):
-        if not self.hint_interact(["Open Gate"]):
-            pass
-        time.sleep(random.uniform(1.5, 3.0))
-        self.talk(["Combat Instructor"])
+        """Out of the rat pen through the gate, then talk to the instructor. Inside the pen
+        a talk click only gives "I can't reach that"."""
+        # talk first: if a dialogue opens we were outside already
+        if self.talk(["Combat Instructor"]):
+            end = time.time() + 5
+            while time.time() < end:
+                if self._is_dialogue(self.read_chat().lower()):
+                    return
+                time.sleep(0.6)
+        if not getattr(self, "_gate_done", False):
+            if self.gate_between_us_and_hint() or (self.walk_to_minimap_door() and self.hover_search(["Open Gate"])):
+                self._gate_done = True  # went through: don't go back in
+                self.sleep_checked(random.uniform(2.0, 3.0))
+                self.talk(["Combat Instructor"])
+
+    def walk_to_minimap_door(self) -> bool:
+        """Doors and gates are short red lines on the minimap: walk to the nearest one."""
+        sc = self.client.get_screenshot().convert("RGB")
+        x0, y0 = MINIMAP_C[0] - MINIMAP_R, MINIMAP_C[1] - MINIMAP_R
+        a = np.asarray(sc.crop((x0, y0, MINIMAP_C[0] + MINIMAP_R, MINIMAP_C[1] + MINIMAP_R)), dtype=np.int16)
+        red = (a[:, :, 0] > 170) & (a[:, :, 1] < 70) & (a[:, :, 2] < 70)
+        num, _, st, ce = cv2.connectedComponentsWithStats(red.astype(np.uint8), connectivity=8)
+        best = None
+        for i in range(1, num):
+            area = int(st[i][4])
+            if not 3 <= area <= 25:
+                continue  # door lines are thin; the red hint arrow is a big blob
+            px, py = x0 + float(ce[i][0]), y0 + float(ce[i][1])
+            d = math.hypot(px - MINIMAP_C[0], py - MINIMAP_C[1])
+            if d < MINIMAP_R - 4 and (best is None or d < best[0]):
+                best = (d, (px, py))
+        if best is None:
+            self.log.info("No door/gate on the minimap")
+            return False
+        d, (px, py) = best
+        self.log.info(f"Walking to the nearest door/gate on the minimap ({px:.0f},{py:.0f}, {d / 4:.0f} tiles)")
+        # stop a tile short, on our side of it
+        k = max(0.0, (d - 4) / d)
+        self.client.click((int(MINIMAP_C[0] + (px - MINIMAP_C[0]) * k), int(MINIMAP_C[1] + (py - MINIMAP_C[1]) * k)))
+        self.sleep_checked(random.uniform(4.0, 6.0))
+        return True
+
+    def grid_search(self, wanted: list[str], step: int = 28) -> bool:
+        """Mouse-over search over the whole game view (nearest to the character first)."""
+        px, py = self._player_point()
+        pts = [(x + random.randint(-5, 5), y + random.randint(-5, 5))
+               for y in range(VIEW[1] + 20, VIEW[3] - 10, step) for x in range(VIEW[0] + 14, VIEW[2] - 10, step)
+               if not (x < OVERLAY_BOX[2] and y < 80)]
+        pts.sort(key=lambda p: math.hypot(p[0] - px, p[1] - py))
+        for pt in pts:
+            if self.terminate:
+                raise ScriptTerminationException()
+            if self.hover_click(pt, wanted):
+                return True
+        self.log.info(f"Whole-view search: no {wanted}")
+        return False
+
+    def gate_between_us_and_hint(self) -> bool:
+        """The rat pen's gate lies between the character and the instructor (who has the
+        arrow): look along that line, a bit to each side, with the mouse (and menus)."""
+        hint = self.find_hint(looks=3)
+        if hint is None:
+            return False
+        px, py = self._player_point()
+        hx, hy = (hint.start_x + hint.end_x) // 2, hint.end_y + 15
+        L = max(1.0, math.hypot(hx - px, hy - py))
+        nx, ny = -(hy - py) / L, (hx - px) / L
+        pts = []
+        for f in (0.35, 0.5, 0.65, 0.25, 0.8):
+            for off in (0, -12, 12, -24, 24):
+                pts.append((int(px + (hx - px) * f + nx * off), int(py + (hy - py) * f + ny * off)))
+        self._menu_ok = True
+        try:
+            for pt in pts:
+                if self.hover_click(pt, ["Open Gate"]):
+                    return True
+        finally:
+            self._menu_ok = False
+        return False
+
+    def menu_grid_at_hint(self, wanted: list[str]) -> bool:
+        """Right-click menus on a small grid around the hint arrow's tip (a gate/ladder right
+        under the arrow whose mouse-over shows something else first)."""
+        hint = self.find_hint(looks=3)
+        if hint is None:
+            return False
+        cx, cy = (hint.start_x + hint.end_x) // 2, hint.end_y
+        pts = [(cx + dx, cy + dy) for dy in range(-4, 44, 8) for dx in range(-18, 19, 9)]
+        pts.sort(key=lambda p: math.hypot(p[0] - cx, (p[1] - cy - 12) * 1.5))
+        for pt in pts[:24]:
+            self.client.move_to((pt[0] + random.randint(-2, 2), min(VIEW[3] - 2, pt[1] + random.randint(-2, 2))))
+            time.sleep(random.uniform(0.08, 0.15))
+            if self.menu_pick(wanted):
+                return True
+        return False
 
     def do_bank_booth(self, t):
         if not self.hint_interact(["Use Bank booth", "Bank Bank booth"], search=True):
@@ -886,7 +977,7 @@ class BotExecutor(HumanMixin, Bot):
 
     def click_tab(self, name: str) -> bool:
         for box in TAB_ROWS:
-            m = self._find_tpl(TABS[name][0], (box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2), 0.72)
+            m = self._find_tpl(TABS[name][0], (box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2), 0.62)
             if m is not None:
                 self.client.click(m.scale_px(-2).get_point_within())
                 time.sleep(self.cfg.action_pause.choose())
@@ -912,9 +1003,9 @@ class BotExecutor(HumanMixin, Bot):
     def click_flashing_tab(self) -> bool:
         """The tab the tutorial wants flashes: the cell whose pixels change most."""
         frames = []
-        for _ in range(6):
+        for _ in range(10):
             frames.append(np.asarray(self.client.get_screenshot().convert("L"), dtype=np.int16))
-            time.sleep(random.uniform(0.18, 0.26))
+            time.sleep(random.uniform(0.22, 0.3))
         best, best_v = None, 0.0
         for cell in self._tab_cells():
             x1, y1, x2, y2 = cell
@@ -981,25 +1072,42 @@ class BotExecutor(HumanMixin, Bot):
         return False
 
     def _deselect(self):
-        # clicking an empty bit of the side panel's frame cancels "Use ... ->"
-        try:
-            keyboard.press_and_release("esc")
-        except Exception:
-            pass
+        """Cancel a selected item ("Use X ->"): a click on the character's own minimap spot
+        (walks nowhere, drops the selection)."""
+        self.client.click((MINIMAP_C[0] + random.randint(-2, 2), MINIMAP_C[1] + random.randint(-2, 2)))
+        time.sleep(random.uniform(0.3, 0.5))
+
+    def _selected_any(self) -> bool:
+        top = self.top_hover().lower()
+        return top.startswith("use ") and "->" in top
 
     def _wield(self, names: list[str]):
-        for n in names:
-            m = self._inv_item(n)
-            if m is None:
-                self.log.info(f"{n}: not in the inventory")
-                continue
-            self.move_inv(m)
-            time.sleep(random.uniform(0.08, 0.15))
-            if any(text_matches(h, "Wield *") or text_matches(h, "Wear *") for h in self.client.get_hover_texts()):
+        """Wield/wear the named items: hover every filled inventory slot and click the ones
+        whose mouse-over says "Wield <name>" / "Wear <name>" (icon matching mixed up the
+        wooden shield and the pot)."""
+        left = {n.lower() for n in names}
+        sc = self.client.get_screenshot()
+        slots = inventory.used_slots(sc)
+        random.shuffle(slots)
+        for slot in slots:
+            if not left:
+                break
+            self.move_inv(slot)
+            time.sleep(random.uniform(0.25, 0.35))
+            hov = [h for h in list(self.client.get_hover_texts()) + [self.top_hover()] if h]
+            hit = None
+            for n in list(left):
+                key = n.split()[-1][:5]
+                if any((text_matches(h, "Wield *") or text_matches(h, "Wear *")) and key in h.lower() for h in hov):
+                    hit = n
+                    break
+            if hit:
                 press()
-            else:
-                self.click_inv(m)
-            time.sleep(random.uniform(0.6, 1.0))
+                left.discard(hit)
+                self.log.info(f"Wielded {hit} ({hov})")
+                time.sleep(random.uniform(0.6, 1.0))
+        if left:
+            self.log.info(f"Not found to wield: {sorted(left)}")
 
     # ================================================================== world clicks
     def _player_point(self) -> tuple[int, int]:
@@ -1134,8 +1242,8 @@ class BotExecutor(HumanMixin, Bot):
             depth = self.cfg.hint_search_depth.value
             self._menu_ok = True
             try:
-                for dy in range(6, depth, 9):
-                    pt = (cx + random.randint(-4, 4), min(VIEW[3] - 2, hint.end_y + dy))
+                for dy in range(-2, depth, 8):
+                    pt = (cx + random.randint(-7, 7), min(VIEW[3] - 2, hint.end_y + dy))
                     if self.hover_click(pt, wanted):
                         return True
             finally:
