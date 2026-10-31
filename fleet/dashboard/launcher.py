@@ -397,6 +397,12 @@ class Launcher:
                         # leave a dead character alone (no restart); Telegram sends an alert
                         self._set(n, status="dead", msg="the character died; bot stopped, left it there",
                                   activity_now=None, ran_s=time.time() - r.get("began_at", r["start_at"]))
+                    elif st not in ("running", "paused", None) and info.get("reason") == "done":
+                        # the bot finished its job by itself (Tutorial Island: on the mainland)
+                        with _lock:
+                            self._final_counts(n, self.runs[str(n)])
+                        self._set(n, status="done", msg="bot finished its job", activity_now=None,
+                                  ran_s=time.time() - r.get("began_at", r["start_at"]))
                     elif st not in ("running", "paused", None):
                         # stopped unexpectedly (bot app restarted by an update, or a crash):
                         # start it again a few times before giving up
