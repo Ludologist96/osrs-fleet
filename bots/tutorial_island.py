@@ -104,6 +104,8 @@ CHAT_BOX = (0, 338, 520, 476)
 # steps after which the character keeps busy on its own for a while (an alt-tab fits)
 ALT_TAB_STEPS = {"fishing", "woodcutting", "firemaking", "cook shrimp", "bake", "mine", "smelt",
                  "anvil", "smithing menu", "attack rat", "bow", "magic: cast", "waiting"}
+# where to walk when the game gives no arrow: (instruction words, tile, label)
+WALK_TARGETS = [(("chapel", "brother brace"), (3125, 3108, 0), "the chapel")]
 DAGGER_CELL = (28, 52, 86, 94)  # first cell of the smithing menu (window coords)
 # never clicked even when the fuzzy match says yes ("Cast Minigame Teleport" ~ "Cast Home Teleport")
 HOVER_NEVER = ("minigame",)
@@ -767,6 +769,17 @@ class BotExecutor(HumanMixin, Bot):
         verbs = ["Open Door", "Open Gate"]
         if self.hint_interact(verbs):
             return
+        # places the game shows no arrow for (from the account building to the chapel
+        # there was none: two runs got stuck there with "I can't reach that!"): walk by
+        # world tile (World Location panel)
+        for words, tile, label in WALK_TARGETS:
+            if has(t, *words):
+                here = self.my_tile()
+                if here is not None and math.hypot(here[0] - tile[0], here[1] - tile[1]) > 4:
+                    self.log.info(f"Walking to {label} by tile {tile} (from {here})")
+                    self.walk_to_tile(tile, tol=3, label=label)
+                    self._walked = True
+                    return
         if not self.walk_to_hint():
             if has(t, "speak to", "talk to") and self.walk_to_minimap_npc():
                 return
@@ -1297,10 +1310,12 @@ class BotExecutor(HumanMixin, Bot):
         # when the target is on the minimap the arrow is yellow over it (~33 px);
         # map icons are ~12 px yellow blobs
         yellow = (hh >= 20) & (hh <= 36) & (hsv[:, :, 1] >= 120) & (hsv[:, :, 2] >= 160)
-        best = None
-        for mask, min_px in ((red, self.cfg.hint_min_pixels_minimap.value),
-                             (yellow, 22)):
-            best = self._best_minimap_blob(mask, box, min_px, best)
+        # red first: the yellow one only counts when there is no red arrow (yellow map
+        # icons - the bank's - are as big as the yellow arrow and sent the character to
+        # the bank instead of the chapel)
+        best = self._best_minimap_blob(red, box, self.cfg.hint_min_pixels_minimap.value, None)
+        if best is None:
+            best = self._best_minimap_blob(yellow, box, 22, None)
         if best:
             self.log.debug(f"Minimap hint at {best[1]} ({best[0]} px)")
         return best[1] if best else None
