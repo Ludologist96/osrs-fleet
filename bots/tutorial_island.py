@@ -482,6 +482,8 @@ class BotExecutor(HumanMixin, Bot):
             return chat
         if has(chat.lower(), "please wait"):
             return chat  # an NPC line still loading ("Please wait..."): the 'waiting' step
+        if time.time() - getattr(self, "_ironman_q", 0) < 20 and len(re.sub(r"[^a-z]", "", chat.lower())) >= 6:
+            return chat  # the ironman menu right after its question (see _dialogue)
         self._ocr_region(sc, OVERLAY_BOX, "overlay")
         # the World Location panel (Tile / Chunk ID / Region ID, white) sits in the same
         # corner when there is no instruction box: drop its lines and number-only lines
@@ -606,6 +608,21 @@ class BotExecutor(HumanMixin, Bot):
         return self._continue(low) or self._options(low)
 
     def _dialogue(self, low: str, sc) -> bool:
+        # "Were you planning to become an Ironman, by the way?" -> a 3-line menu whose OCR is
+        # often unusable ("want to bJtome 92o, to do that,"); its last line is always
+        # "No, I'm not planning to do that." -> key 3
+        if has(low, "planning to become", "pnning to become", "by the way"):
+            self._ironman_q = time.time()
+        if time.time() - getattr(self, "_ironman_q", 0) < 20 and not self._continue(low) \
+                and not has(low, "please wait") and len(getattr(self, "_chat_lines_box", []) or []) >= 2 \
+                and not getattr(self, "_from_overlay", False):
+            self._ironman_q = 0
+            time.sleep(self.cfg.continue_pause.choose())
+            keyboard.press_and_release("3")
+            self.log.info("Ironman menu: chose 3 (No, I'm not planning to do that)")
+            self._last_option, self._last_option_t = "no im not planning to do that", time.time()
+            time.sleep(random.uniform(0.8, 1.2))
+            return True
         if self._options(low):
             return self._choose_option()
         # right after picking an option the character says it ("Nope, I'm ready to move
