@@ -68,3 +68,8 @@ class HabitsConfig(BotConfigMixin):
     zoom_min: IntParam = IntParam(-4)  # wheel notches out from the starting zoom (limit)
     zoom_max: IntParam = IntParam(3)   # wheel notches in from the starting zoom (limit)
     start_zoom_in: IntParam = IntParam(14)  # start view: fully out, then this many notches in
+
+    # --- fatigue (core/fatigue.py): the longer it plays, the slower and sloppier it gets;
+    # breaks recover it; each account has its own "player" profile. 0 = off, 1 = normal,
+    # 2 = twice the effect.
+    fatigue_strength: FloatParam = FloatParam(1.0)

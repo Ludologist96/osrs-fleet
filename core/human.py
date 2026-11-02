@@ -9,6 +9,8 @@ Player-like habits shared by the woodcutter and the slayer bot (Igor's TODO, Oct
 - micro-idle: a short extra pause after a click;
 - misclick: rarely click a little next to the target, then click the target again;
 - a forced camera fidget when none happened for a while;
+- fatigue (core/fatigue.py): slower and sloppier the longer it plays, attention lapses,
+  more misclicks / pauses / alt-tabs / breaks when tired; a per-account "player" profile;
 - breaks start "on cooldown" when a bot starts, a long break is forced after
   session_max_minutes, a short one after N actions without a break.
 
@@ -49,8 +51,39 @@ class HumanMixin:
         c.long_break_end = now
         c.session_start = now
         c.session_max_seconds = 60.0 * float(_v(self.cfg, "session_max_minutes", 0) or 0)
+        self._fatigue_init()
         self.log.info("Breaks, alt-tab and walk-away start on cooldown "
                       f"(long break forced after {c.session_max_seconds / 60:.0f} min of play)")
+
+    def _account_name(self) -> str:
+        """The logged-in account (RuneLite's window title "RuneLite - Name"), else the slot."""
+        try:
+            title = str(self.client.window.title or "")
+        except Exception:
+            title = ""
+        if " - " in title:
+            return title.split(" - ", 1)[1].strip()
+        import os
+        return f"slot{os.environ.get('OSRS_SLOT', '0')}"
+
+    def _fatigue_init(self) -> None:
+        from core import fatigue
+        strength = float(_v(self.cfg, "fatigue_strength", 0) or 0)
+        fat = fatigue.get()
+        c = self.control
+        prof = fat.start(self._account_name(), strength, break_until_fn=lambda: c.break_until)
+        if strength <= 0:
+            self.log.info("Fatigue: off (fatigue_strength 0)")
+            return
+        # each "player" likes a different session length before a long break
+        if c.session_max_seconds:
+            c.session_max_seconds *= prof.session_mult
+        self.log.info(f"Player profile for {prof.account}: {prof.describe()}; fatigue strength {strength:.1f}")
+
+    @property
+    def fatigue(self):
+        from core import fatigue
+        return fatigue.get()
 
     # ------------------------------------------------------------ small things
     def sleep_checked(self, seconds: float) -> None:
@@ -62,10 +95,23 @@ class HumanMixin:
             time.sleep(min(0.25, max(0.0, end - time.time())))
 
     def micro_idle(self) -> None:
-        """After a successful click, sometimes a short extra pause (looking at the screen)."""
-        if random.random() < float(_v(self.cfg, "micro_idle_chance", 0) or 0):
+        """After a successful click, sometimes a short extra pause (looking at the screen).
+        Tired: more often and a bit longer, and now and then an attention lapse (a few
+        seconds of nothing - phone, drink, daydream)."""
+        fat = self.fatigue
+        if random.random() < fat.chance(float(_v(self.cfg, "micro_idle_chance", 0) or 0), 1.5):
             lo, hi = _v(self.cfg, "micro_idle", (0.25, 0.9))
-            time.sleep(random.uniform(lo, hi))
+            time.sleep(random.uniform(lo, hi) * fat.react_factor())
+        lapse = fat.lapse_seconds()
+        if lapse:
+            prev = getattr(self, "activity", "")
+            self.set_activity("short pause")
+            self.log.info(f"Attention lapse: {lapse:.1f}s (fatigue {fat.level():.2f})")
+            fat.rest(lapse)
+            try:
+                self.sleep_checked(lapse)
+            finally:
+                self.set_activity(prev or "working")
 
     def note_action(self) -> None:
         """One successful main action (tree chopped / monster killed): counts for the
@@ -116,8 +162,10 @@ class HumanMixin:
         the window, click on the desktop, wait, mouse back in, look at the screen.
         `still_busy()` is asked after coming back (just for the log).
         Returns True when it alt-tabbed."""
-        chance = float(_v(self.cfg, "alt_tab_chance", 0) or 0)
-        cooldown = float(_v(self.cfg, "alt_tab_cooldown", 60) or 0)
+        fat = self.fatigue
+        # tired: alt-tabs more often (higher chance, shorter cooldown)
+        chance = fat.chance(float(_v(self.cfg, "alt_tab_chance", 0) or 0), 1.0)
+        cooldown = float(_v(self.cfg, "alt_tab_cooldown", 60) or 0) / (1 + 0.5 * fat.strength * fat.level())
         now = time.time()
         if not chance or now - self.last_alt_tab < cooldown:
             return False
@@ -133,6 +181,7 @@ class HumanMixin:
             secs = random.uniform(*_v(self.cfg, "alt_tab_short", (4.0, 18.0)))
             kind = "short"
         prev = getattr(self, "activity", "")
+        fat.rest(secs)
         self.set_activity("alt tab")
         self.log.info(f"Alt-tab: another window for {secs:.0f}s ({kind}) while the {what} goes on")
         try:
@@ -618,7 +667,7 @@ class HumanMixin:
         """Rarely, right after a successful click: click 8-25 px next to it (the character
         walks there / stops), the caller then clicks its target again. `avoid(text)` -> True
         for mouse-over texts that must not be clicked (e.g. another monster)."""
-        if random.random() >= float(_v(self.cfg, "misclick_chance", 0) or 0):
+        if random.random() >= self.fatigue.chance(float(_v(self.cfg, "misclick_chance", 0) or 0), 2.0):
             return False
         from core.input import mouse_control
         for _ in range(4):
@@ -636,7 +685,7 @@ class HumanMixin:
                     continue
             mouse_control.press()
             self.log.info(f"Misclick at ({x},{y}), {d:.0f}px off: clicking the target again")
-            time.sleep(random.uniform(0.15, 0.45))
+            time.sleep(random.uniform(0.15, 0.45) * self.fatigue.react_factor())
             return True
         return False
 

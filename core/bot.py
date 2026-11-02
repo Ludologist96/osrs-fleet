@@ -17,6 +17,8 @@ class Bot:
         self.control = ScriptControl()
         # Clear script control state on start
         self.control.reset()
+        from core import fatigue
+        fatigue.get().stop()  # the bot's human_init() starts it with this account's profile
         self.client = RuneLiteClient(user)
         self.itemdb = ItemLookup()
         self.bank = BankInterface(self.client, self.itemdb)

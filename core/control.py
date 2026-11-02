@@ -80,8 +80,12 @@ class ScriptControl(metaclass=SingletonMeta):
             played = now - max(self.session_start, self.long_break_end)
             forced = bool(lb and self.session_max_seconds and self.session_start
                           and played >= self.session_max_seconds)
+            import random
+            from core import fatigue
+            fat = fatigue.get()
+            # a tired player stops more often (fatigue raises both break chances)
             if lb and (forced or (now >= self.long_break_end + self.long_break_cooldown_seconds
-                                  and lb.should_break())):
+                                  and random.random() < fat.chance(float(lb.break_chance), 1.0))):
                 sec = int(lb.break_duration.choose())
                 if forced:
                     self.log.info(f"Played {played / 60:.0f} min without a long break: taking one now.")
@@ -104,13 +108,12 @@ class ScriptControl(metaclass=SingletonMeta):
                 return
             if now < self.break_until + self.break_cooldown_seconds:
                 return
-            if self.break_config.should_break():
+            if random.random() < fat.chance(float(self.break_config.break_chance), 1.5):
                 sec = int(self.break_config.break_duration.choose())
                 self.initialize_break(
                     sec
                 )
-                self.log.info(f"Sleeping for {sec} seconds.")
-                import random
+                self.log.info(f"Sleeping for {sec} seconds (fatigue {fat.level():.2f}).")
                 if self.on_short_break and random.random() < self.on_short_break_chance:
                     self._break_hook_pending = True
         else:
@@ -220,6 +223,11 @@ class ScriptControl(metaclass=SingletonMeta):
         with self._relogin_lock:
             if not self._relogin_needed:
                 return
+            try:
+                from core import fatigue
+                fatigue.get().long_rest()  # rested: most of the fatigue is gone
+            except Exception:
+                self.log.debug("fatigue reset failed", exc_info=True)
             if self.after_long_break:
                 self.log.info("Long break over: getting back into the game")
                 self._relogging = True

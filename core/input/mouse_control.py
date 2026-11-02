@@ -254,7 +254,9 @@ def _constrain_travel(p1: Tuple[float, float],
 def hold_time() -> float:
     """How long a person keeps a mouse button down for a click: mostly 60-130 ms,
     sometimes quicker or slower (log-normal), never a 0 ms machine click."""
-    return min(0.25, max(0.035, random.lognormvariate(math.log(0.085), 0.3)))
+    from core import fatigue
+    f = fatigue.get().hold_factor()  # a tired hand holds a little longer
+    return min(0.3, max(0.035, random.lognormvariate(math.log(0.085), 0.3) * f))
 
 
 def press(click_type: "ClickType" = None) -> None:
@@ -278,7 +280,8 @@ def click(
     verify_tolerance: int = 3,
     verify_corrections: int = 2):
     def _do_click():
-        time.sleep(random.uniform(.05, .15))  # settle before pressing
+        from core import fatigue
+        time.sleep(random.uniform(.05, .15) * fatigue.get().react_factor())  # settle before pressing
         press(click_type)
 
     _block(True)
@@ -357,7 +360,11 @@ def move_to(
         return
 
     # one speed for this whole move (some moves quick, some lazy)
-    move_speed_factor = min(1.8, max(0.6, random.lognormvariate(0, 0.28)))
+    # (fatigue: the account's base speed, slower and less steady when tired / warming up)
+    from core import fatigue
+    fat = fatigue.get()
+    move_speed_factor = min(2.2, max(0.6, random.lognormvariate(0, 0.28 * fat.mouse_spread())
+                                     * fat.mouse_factor()))
     tremor = random.uniform(0.6, 2.2) if wobble_px == (-1, -1) else float(sum(wobble_px)) / 4
 
     legs = []
